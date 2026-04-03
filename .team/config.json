@@ -1,0 +1,35 @@
+{
+  "team_name": "engineering",
+  "members": [
+    {
+      "name": "pm",
+      "role": "product_manager",
+      "status": "idle"
+    },
+    {
+      "name": "architect",
+      "role": "architect",
+      "status": "working"
+    },
+    {
+      "name": "ui_designer",
+      "role": "ui_designer",
+      "status": "working"
+    },
+    {
+      "name": "coder",
+      "role": "coder",
+      "status": "idle"
+    },
+    {
+      "name": "reviewer",
+      "role": "code_reviewer",
+      "status": "idle"
+    },
+    {
+      "name": "tester",
+      "role": "tester",
+      "status": "idle"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ -f "$ROOT_DIR/.venv/bin/python" ]]; then
+  if [[ -f "$ROOT_DIR/.venv/bin/qcode" ]]; then
+    exec "$ROOT_DIR/.venv/bin/qcode" --workdir "$ROOT_DIR" "$@"
+  fi
+  exec "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/agent_loop.py" --workdir "$ROOT_DIR" "$@"
+fi
+
+exec python3 "$ROOT_DIR/agent_loop.py" --workdir "$ROOT_DIR" "$@"

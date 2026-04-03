@@ -1,0 +1,3 @@
+[console_scripts]
+qcode = qcode.harness.cli:main
+qoder = qcode.harness.cli:main

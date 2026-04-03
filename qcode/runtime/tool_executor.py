@@ -1,0 +1,363 @@
+"""Tool-call execution orchestration."""
+
+from __future__ import annotations
+
+from concurrent.futures import Future, ThreadPoolExecutor
+import json
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional
+
+from qcode.providers.base import EventType, ResponseEvent, ToolCallEvent
+from qcode.runtime.context import ToolExecutionContext
+from qcode.runtime.session import ConversationSession
+from qcode.runtime.types import Message, ToolCall
+from qcode.telemetry.events import EventSink, NullEventSink
+from qcode.tools.registry import ToolRegistry
+
+
+ToolOutputHandler = Callable[[str, str], None]
+
+
+@dataclass(frozen=True)
+class ToolExecutionResult:
+    """Normalized result of a tool-execution round."""
+
+    messages: List[Message]
+    used_todo: bool
+
+
+@dataclass(frozen=True)
+class SingleToolExecutionResult:
+    """Normalized result for one completed tool call."""
+
+    message: Message
+    used_todo: bool
+    tool_name: str
+    output: str
+
+
+@dataclass
+class _StreamingToolState:
+    tool_call_id: str
+    tool_name: str = ""
+    arguments_chunks: List[str] = field(default_factory=list)
+    arguments_done: Optional[str] = None
+    submitted: bool = False
+    future: Optional[Future[SingleToolExecutionResult]] = None
+
+    def merge(self, tool_call: ToolCallEvent) -> None:
+        if tool_call.tool_name:
+            self.tool_name = tool_call.tool_name
+        if tool_call.arguments_delta:
+            self.arguments_chunks.append(tool_call.arguments_delta)
+        if tool_call.arguments_done is not None:
+            self.arguments_done = tool_call.arguments_done
+
+    def to_tool_call(self) -> Optional[ToolCall]:
+        if not self.tool_name:
+            return None
+        arguments = self.arguments_done
+        if arguments is None:
+            arguments = "".join(self.arguments_chunks)
+        if not arguments:
+            return None
+        return {
+            "id": self.tool_call_id,
+            "type": "function",
+            "function": {
+                "name": self.tool_name,
+                "arguments": arguments,
+            },
+        }
+
+
+class ToolCallExecutor:
+    """Runs completed tool calls and emits normalized tool messages."""
+
+    def __init__(
+        self,
+        tool_registry: ToolRegistry,
+        event_sink: Optional[EventSink] = None,
+        output_handler: Optional[ToolOutputHandler] = None,
+    ) -> None:
+        self.tool_registry = tool_registry
+        self.event_sink = event_sink or NullEventSink()
+        self.output_handler = output_handler
+
+    def execute(
+        self,
+        session: ConversationSession,
+        tool_calls: List[ToolCall],
+    ) -> ToolExecutionResult:
+        tool_messages: List[Message] = []
+        used_todo = False
+
+        for tool_call in tool_calls:
+            single_result = self.execute_single(session, tool_call, emit_output=True)
+            tool_messages.append(single_result.message)
+            used_todo = used_todo or single_result.used_todo
+
+        return ToolExecutionResult(messages=tool_messages, used_todo=used_todo)
+
+    def execute_single(
+        self,
+        session: ConversationSession,
+        tool_call: ToolCall,
+        *,
+        emit_output: bool,
+    ) -> SingleToolExecutionResult:
+        function_name = str(tool_call.get("function", {}).get("name", ""))
+
+        try:
+            function_args = self._decode_arguments(tool_call)
+        except ValueError as exc:
+            output = f"Error: Invalid tool arguments for {function_name}: {exc}"
+        else:
+            self._emit_event(
+                "tool.call",
+                {
+                    "session_id": session.session_id,
+                    "tool": function_name,
+                },
+            )
+            output = self.tool_registry.dispatch(
+                function_name,
+                function_args,
+                context=ToolExecutionContext(session=session),
+            )
+
+        if emit_output and self.output_handler:
+            self.output_handler(function_name, output)
+
+        self._emit_event(
+            "tool.result",
+            {
+                "session_id": session.session_id,
+                "tool": function_name,
+                "output_chars": len(output),
+            },
+        )
+
+        return SingleToolExecutionResult(
+            message={
+                "role": "tool",
+                "tool_call_id": tool_call.get("id"),
+                "content": output,
+            },
+            used_todo=function_name == "todo" and not output.startswith("Error:"),
+            tool_name=function_name,
+            output=output,
+        )
+
+    @staticmethod
+    def _decode_arguments(tool_call: ToolCall) -> Dict[str, Any]:
+        function = tool_call.get("function", {})
+        raw_arguments = function.get("arguments", {}) if isinstance(function, dict) else {}
+
+        if isinstance(raw_arguments, dict):
+            return raw_arguments
+        if raw_arguments in (None, ""):
+            return {}
+        if not isinstance(raw_arguments, str):
+            raise ValueError("Tool arguments must be a JSON object or string")
+
+        return json.loads(raw_arguments)
+
+    def _emit_event(self, event_type: str, payload: Dict[str, Any]) -> None:
+        try:
+            self.event_sink.emit(event_type, payload)
+        except Exception:
+            return
+
+
+class StreamingToolExecutor:
+    """Observe streamed tool events and execute tools outside the model loop.
+
+    This mirrors the Claude Code boundary: stream parsing stays with the provider,
+    while tool execution lifecycle is managed by a dedicated orchestrator.
+    """
+
+    def __init__(
+        self,
+        executor: ToolCallExecutor,
+        event_sink: Optional[EventSink] = None,
+        max_workers: int = 4,
+    ) -> None:
+        self.executor = executor
+        self.event_sink = event_sink or NullEventSink()
+        self.max_workers = max(1, max_workers)
+        self._pool: Optional[ThreadPoolExecutor] = None
+        self._states: Dict[str, _StreamingToolState] = {}
+        self._order: List[str] = []
+        self._session: Optional[ConversationSession] = None
+        self._turn_id = 0
+
+    def begin_turn(self, session: ConversationSession) -> None:
+        self._turn_id += 1
+        self._session = session
+        self._pool = ThreadPoolExecutor(max_workers=self.max_workers)
+        self._states = {}
+        self._order = []
+        self._emit_event(
+            "tool.stream.turn_started",
+            {
+                "session_id": session.session_id,
+                "turn_id": self._turn_id,
+            },
+        )
+
+    def observe_event(self, event: ResponseEvent) -> None:
+        if event.event_type not in {EventType.TOOL_CALL_DELTA, EventType.TOOL_CALL_DONE}:
+            return
+        tool_call = event.tool_call
+        if tool_call is None:
+            return
+
+        state = self._states.get(tool_call.tool_call_id)
+        if state is None:
+            state = _StreamingToolState(tool_call_id=tool_call.tool_call_id)
+            self._states[tool_call.tool_call_id] = state
+            self._order.append(tool_call.tool_call_id)
+        state.merge(tool_call)
+
+        self._emit_event(
+            "tool.stream.observed",
+            {
+                "session_id": self._session.session_id if self._session else None,
+                "tool_call_id": tool_call.tool_call_id,
+                "tool": state.tool_name,
+                "event_type": event.event_type.value,
+            },
+        )
+
+        if event.event_type == EventType.TOOL_CALL_DONE:
+            self._submit_if_ready(state)
+
+    def finalize(
+        self,
+        fallback_tool_calls: List[ToolCall],
+    ) -> ToolExecutionResult:
+        try:
+            self._submit_missing_fallback_calls(fallback_tool_calls)
+            messages: List[Message] = []
+            used_todo = False
+            for tool_call_id in self._order:
+                state = self._states[tool_call_id]
+                self._submit_if_ready(state)
+                if state.future is None:
+                    continue
+                single_result = state.future.result()
+                messages.append(single_result.message)
+                used_todo = used_todo or single_result.used_todo
+                if self.executor.output_handler:
+                    self.executor.output_handler(single_result.tool_name, single_result.output)
+            return ToolExecutionResult(messages=messages, used_todo=used_todo)
+        finally:
+            self._shutdown_pool(wait=True, cancel_futures=False)
+            self._reset_turn_state()
+
+    def discard(self, *, wait_running: bool = True) -> None:
+        drained = 0
+        if wait_running:
+            drained = self._drain_started_futures()
+        self._shutdown_pool(wait=wait_running, cancel_futures=not wait_running)
+        self._emit_event(
+            "tool.stream.discarded",
+            {
+                "session_id": self._session.session_id if self._session else None,
+                "turn_id": self._turn_id,
+                "wait_running": wait_running,
+                "drained_futures": drained,
+            },
+        )
+        self._reset_turn_state()
+
+    def _drain_started_futures(self) -> int:
+        drained = 0
+        for tool_call_id in self._order:
+            state = self._states.get(tool_call_id)
+            if state is None or state.future is None:
+                continue
+            try:
+                single_result = state.future.result()
+                drained += 1
+                self._emit_event(
+                    "tool.stream.drained_on_abort",
+                    {
+                        "session_id": self._session.session_id if self._session else None,
+                        "turn_id": self._turn_id,
+                        "tool_call_id": tool_call_id,
+                        "tool": single_result.tool_name,
+                        "output_chars": len(single_result.output),
+                    },
+                )
+            except Exception as exc:
+                self._emit_event(
+                    "tool.stream.drain_error",
+                    {
+                        "session_id": self._session.session_id if self._session else None,
+                        "turn_id": self._turn_id,
+                        "tool_call_id": tool_call_id,
+                        "error": str(exc),
+                    },
+                )
+        return drained
+
+    def _shutdown_pool(self, *, wait: bool, cancel_futures: bool) -> None:
+        if self._pool is not None:
+            self._pool.shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    def _reset_turn_state(self) -> None:
+        self._pool = None
+        self._session = None
+        self._states = {}
+        self._order = []
+
+    def _submit_if_ready(self, state: _StreamingToolState) -> None:
+        if state.submitted or self._pool is None or self._session is None:
+            return
+        tool_call = state.to_tool_call()
+        if tool_call is None:
+            return
+        state.submitted = True
+        state.future = self._pool.submit(
+            self.executor.execute_single,
+            self._session,
+            tool_call,
+            emit_output=False,
+        )
+        self._emit_event(
+            "tool.stream.submitted",
+            {
+                "session_id": self._session.session_id,
+                "tool_call_id": state.tool_call_id,
+                "tool": state.tool_name,
+            },
+        )
+
+    def _submit_missing_fallback_calls(self, fallback_tool_calls: List[ToolCall]) -> None:
+        for tool_call in fallback_tool_calls:
+            tool_call_id = str(tool_call.get("id") or "")
+            if not tool_call_id:
+                continue
+            state = self._states.get(tool_call_id)
+            if state is None:
+                function = tool_call.get("function", {})
+                tool_name = str(function.get("name", "")) if isinstance(function, dict) else ""
+                arguments = function.get("arguments", "{}") if isinstance(function, dict) else "{}"
+                if isinstance(arguments, dict):
+                    arguments = json.dumps(arguments, ensure_ascii=False)
+                state = _StreamingToolState(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    arguments_done=str(arguments),
+                )
+                self._states[tool_call_id] = state
+                self._order.append(tool_call_id)
+            self._submit_if_ready(state)
+
+    def _emit_event(self, event_type: str, payload: Dict[str, Any]) -> None:
+        try:
+            self.event_sink.emit(event_type, payload)
+        except Exception:
+            return
