@@ -18,6 +18,8 @@ def build_verification_tool_definitions(
         subject: str = "",
         details: str = "",
         tester: str = "tester",
+        test_plan: str = "",
+        requires_ui_check: Optional[bool] = None,
         task_id: Optional[int] = None,
         loop_id: str = "",
         context: Optional[ToolExecutionContext] = None,
@@ -28,8 +30,35 @@ def build_verification_tool_definitions(
                 subject=subject,
                 details=details,
                 tester=tester,
+                test_plan=test_plan,
+                requires_ui_check=requires_ui_check,
                 task_id=task_id,
                 loop_id=loop_id,
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
+        return json.dumps(record, indent=2, ensure_ascii=False)
+
+    def record_test_evidence(
+        loop_id: str,
+        evidence_type: str = "",
+        command: str = "",
+        output: str = "",
+        url: str = "",
+        exit_code: Optional[int] = None,
+        notes: str = "",
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        try:
+            record = verification_manager.record_evidence(
+                loop_id=loop_id,
+                reporter=sender,
+                evidence_type=evidence_type,
+                command=command,
+                output=output,
+                url=url,
+                exit_code=exit_code,
+                notes=notes,
             )
         except ValueError as exc:
             return f"Error: {exc}"
@@ -90,11 +119,44 @@ def build_verification_tool_definitions(
                     "subject": {"type": "string", "description": "Feature or change being verified"},
                     "details": {"type": "string", "description": "What changed and what should be tested"},
                     "tester": {"type": "string", "description": "Tester teammate name"},
+                    "test_plan": {
+                        "type": "string",
+                        "description": "Concrete test plan or commands required for verification",
+                    },
+                    "requires_ui_check": {
+                        "type": "boolean",
+                        "description": "Set true for frontend/UI verification (requires ui_check evidence).",
+                    },
                     "task_id": {"type": "integer", "description": "Optional linked task id"},
                     "loop_id": {"type": "string", "description": "Existing loop id when resubmitting after fixes"},
                 },
+                "required": ["test_plan"],
             },
             handler=request_verification,
+        ),
+        ToolDefinition(
+            name="record_test_evidence",
+            description="Record tester evidence (commands, outputs, URLs, notes) for the current verification attempt.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "loop_id": {"type": "string", "description": "Verification loop id"},
+                    "evidence_type": {
+                        "type": "string",
+                        "description": "Evidence type (command, api, ui_check, db, or note)",
+                    },
+                    "command": {"type": "string", "description": "Command executed (if any)"},
+                    "output": {"type": "string", "description": "Command or request output (if any)"},
+                    "url": {"type": "string", "description": "URL or endpoint tested (if any)"},
+                    "exit_code": {
+                        "type": "integer",
+                        "description": "Exit code from the command (if any)",
+                    },
+                    "notes": {"type": "string", "description": "Additional tester notes"},
+                },
+                "required": ["loop_id"],
+            },
+            handler=record_test_evidence,
         ),
         ToolDefinition(
             name="report_verification_result",

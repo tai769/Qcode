@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -83,6 +84,8 @@ class ToolCallExecutor:
         self.tool_registry = tool_registry
         self.event_sink = event_sink or NullEventSink()
         self.output_handler = output_handler
+        self._consecutive_failures: Dict[str, int] = {}
+        self._MAX_CONSECUTIVE_FAILURES = 10
 
     def execute(
         self,
@@ -107,17 +110,46 @@ class ToolCallExecutor:
         emit_output: bool,
     ) -> SingleToolExecutionResult:
         function_name = str(tool_call.get("function", {}).get("name", ""))
+        tool_call_id = str(tool_call.get("id") or "")
+        arguments_preview = self._preview_arguments(tool_call)
+        started_at = time.monotonic()
+        status = "ok"
+        error_summary = ""
+        error_type = ""
 
         try:
-            function_args = self._decode_arguments(tool_call)
+            function_args = self._decode_arguments(tool_call, function_name)
         except ValueError as exc:
-            output = f"Error: Invalid tool arguments for {function_name}: {exc}"
+            status = "error"
+            error_type = "invalid_arguments"
+            error_summary = str(exc)
+            self._consecutive_failures[function_name] = self._consecutive_failures.get(function_name, 0) + 1
+            failure_count = self._consecutive_failures[function_name]
+
+            if failure_count >= self._MAX_CONSECUTIVE_FAILURES:
+                output = (
+                    f"Tool '{function_name}' has failed {failure_count} times consecutively "
+                    f"due to invalid arguments. Stop calling this tool and proceed "
+                    f"with your task using other available tools."
+                )
+            else:
+                tool_call_info = tool_call.get("function", {})
+                actual_input = str(tool_call_info.get("arguments", ""))[:100]
+                output = (
+                    f"Error: Invalid tool arguments for '{function_name}': {exc}"
+                    f"You provided: {actual_input}"
+                    f"Please retry with valid JSON (double-quoted keys and values)"
+                )
         else:
+            # Reset failure count on success
+            self._consecutive_failures[function_name] = 0
             self._emit_event(
                 "tool.call",
                 {
                     "session_id": session.session_id,
                     "tool": function_name,
+                    "tool_call_id": tool_call_id,
+                    "arguments_preview": arguments_preview,
                 },
             )
             output = self.tool_registry.dispatch(
@@ -125,18 +157,43 @@ class ToolCallExecutor:
                 function_args,
                 context=ToolExecutionContext(session=session),
             )
+            if output.startswith("Error:"):
+                status = "error"
+                error_type = "tool_error"
+                error_summary = output[:200]
+
+        if status == "error" and not error_summary:
+            error_summary = output[:200]
 
         if emit_output and self.output_handler:
             self.output_handler(function_name, output)
 
+        duration_ms = int((time.monotonic() - started_at) * 1000)
         self._emit_event(
             "tool.result",
             {
                 "session_id": session.session_id,
                 "tool": function_name,
+                "tool_call_id": tool_call_id,
+                "status": status,
                 "output_chars": len(output),
+                "duration_ms": duration_ms,
+                "error_type": error_type,
+                "error_summary": error_summary,
             },
         )
+        if status == "error":
+            self._emit_event(
+                "tool.error",
+                {
+                    "session_id": session.session_id,
+                    "tool": function_name,
+                    "tool_call_id": tool_call_id,
+                    "arguments_preview": arguments_preview,
+                    "error_type": error_type,
+                    "error_summary": error_summary or output[:200],
+                },
+            )
 
         return SingleToolExecutionResult(
             message={
@@ -145,12 +202,25 @@ class ToolCallExecutor:
                 "content": output,
             },
             used_todo=function_name == "todo" and not output.startswith("Error:"),
-            tool_name=function_name,
-            output=output,
-        )
+        tool_name=function_name,
+        output=output,
+    )
 
     @staticmethod
-    def _decode_arguments(tool_call: ToolCall) -> Dict[str, Any]:
+    def _preview_arguments(tool_call: ToolCall) -> str:
+        function = tool_call.get("function", {})
+        raw_arguments = function.get("arguments", "") if isinstance(function, dict) else ""
+        preview = ""
+        if isinstance(raw_arguments, dict):
+            try:
+                preview = json.dumps(raw_arguments, ensure_ascii=False)
+            except (TypeError, ValueError):
+                preview = str(raw_arguments)
+        else:
+            preview = str(raw_arguments)
+        return preview[:500]
+
+    def _decode_arguments(self, tool_call: ToolCall, tool_name: str) -> Dict[str, Any]:
         function = tool_call.get("function", {})
         raw_arguments = function.get("arguments", {}) if isinstance(function, dict) else {}
 
@@ -161,7 +231,19 @@ class ToolCallExecutor:
         if not isinstance(raw_arguments, str):
             raise ValueError("Tool arguments must be a JSON object or string")
 
-        return json.loads(raw_arguments)
+        try:
+            return json.loads(raw_arguments)
+        except json.JSONDecodeError as exc:
+            if self._allows_empty_arguments(tool_name):
+                return {}
+            raise ValueError("Tool arguments must be valid JSON") from exc
+
+    def _allows_empty_arguments(self, tool_name: str) -> bool:
+        tool_def = self.tool_registry.get_definition(tool_name)
+        if tool_def is None:
+            return False
+        required = tool_def.parameters.get("required", [])
+        return not required
 
     def _emit_event(self, event_type: str, payload: Dict[str, Any]) -> None:
         try:

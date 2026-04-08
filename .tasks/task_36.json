@@ -1,0 +1,11 @@
+{
+  "id": 36,
+  "subject": "端到端测试验证所有功能",
+  "description": "启动开发服务器，测试导航、页面跳转、动画效果、3D背景、响应式布局，记录问题清单",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "ld",
+  "requiredRole": "tester",
+  "createdAt": "2026-04-06T14:21:12.694157+00:00",
+  "updatedAt": "2026-04-06T15:47:31.788153+00:00"
+}

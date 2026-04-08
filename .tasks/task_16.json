@@ -1,0 +1,11 @@
+{
+  "id": 16,
+  "subject": "单元测试：组件测试",
+  "description": "编写核心组件的单元测试：GlassCard、NeonBorder、Background3D、PostCard等。使用React Testing Library。确保组件渲染正确、交互正常。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "tester",
+  "requiredRole": "tester",
+  "createdAt": "2026-04-06T13:33:20.553258+00:00",
+  "updatedAt": "2026-04-06T15:17:10.787706+00:00"
+}

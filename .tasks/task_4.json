@@ -1,0 +1,11 @@
+{
+  "id": 4,
+  "subject": "完善协议/审批面板 - 实现审批流程",
+  "description": "实现Protocol/Approval面板的完整流程：创建请求、审批、拒绝、查看历史。需要：\n1. 后端ProtocolRequest模型和API（/api/protocols）\n2. 前端协议列表和详情视图\n3. 审批对话框和确认机制\n4. 协议状态变更通知\n依赖：后端Protocol API端点",
+  "status": "pending",
+  "blockedBy": [],
+  "owner": "",
+  "requiredRole": "frontend",
+  "createdAt": "2026-04-05T16:59:52.923796+00:00",
+  "updatedAt": "2026-04-05T16:59:52.923796+00:00"
+}

@@ -19,6 +19,8 @@ VALID_VERIFICATION_STATUSES = {
     "passed",
 }
 
+_MAX_EVIDENCE_OUTPUT_CHARS = 2000
+
 MessageSender = Callable[[str, str, str, str, Optional[dict[str, object]]], str]
 
 
@@ -50,6 +52,8 @@ class VerificationLoopManager:
         subject: str = "",
         details: str = "",
         tester: str = "tester",
+        test_plan: str = "",
+        requires_ui_check: Optional[bool] = None,
         task_id: Optional[int] = None,
         loop_id: str = "",
     ) -> dict[str, Any]:
@@ -58,6 +62,7 @@ class VerificationLoopManager:
         cleaned_tester = tester.strip() or "tester"
         cleaned_loop_id = loop_id.strip()
         cleaned_details = details.strip()
+        cleaned_test_plan = test_plan.strip()
 
         if not cleaned_owner:
             raise ValueError("Verification owner is required")
@@ -69,6 +74,14 @@ class VerificationLoopManager:
                     raise ValueError(
                         f"Loop {cleaned_loop_id} belongs to '{record['owner']}', not '{cleaned_owner}'"
                     )
+                if requires_ui_check is not None:
+                    record["requiresUiCheck"] = bool(requires_ui_check)
+                if "requiresUiCheck" not in record:
+                    record["requiresUiCheck"] = False
+                if cleaned_test_plan:
+                    record["testPlan"] = cleaned_test_plan
+                if not record.get("testPlan"):
+                    raise ValueError("Test plan is required for verification requests")
                 if task_id is not None:
                     record["taskId"] = int(task_id)
                 if cleaned_subject:
@@ -78,6 +91,8 @@ class VerificationLoopManager:
             else:
                 if not cleaned_subject:
                     raise ValueError("Subject is required when starting a new verification loop")
+                if not cleaned_test_plan:
+                    raise ValueError("Test plan is required for verification requests")
                 loop_id_value = uuid.uuid4().hex[:8]
                 now = self._utc_now()
                 record = {
@@ -86,6 +101,8 @@ class VerificationLoopManager:
                     "owner": cleaned_owner,
                     "tester": cleaned_tester,
                     "lead": self.lead_name,
+                    "testPlan": cleaned_test_plan,
+                    "requiresUiCheck": bool(requires_ui_check),
                     "taskId": int(task_id) if task_id is not None else None,
                     "status": "awaiting_test",
                     "createdAt": now,
@@ -99,6 +116,7 @@ class VerificationLoopManager:
                 "submittedBy": cleaned_owner,
                 "requestedAt": self._utc_now(),
                 "details": cleaned_details,
+                "evidence": [],
                 "result": None,
             }
             record["attempts"].append(attempt)
@@ -140,6 +158,85 @@ class VerificationLoopManager:
         )
         return record
 
+    def record_evidence(
+        self,
+        loop_id: str,
+        reporter: str,
+        evidence_type: str = "",
+        command: str = "",
+        output: str = "",
+        url: str = "",
+        exit_code: Optional[int] = None,
+        notes: str = "",
+    ) -> dict[str, Any]:
+        cleaned_loop_id = loop_id.strip()
+        cleaned_reporter = reporter.strip()
+        cleaned_type = evidence_type.strip().lower() or "command"
+        cleaned_command = command.strip()
+        cleaned_output = output.strip()
+        cleaned_url = url.strip()
+        cleaned_notes = notes.strip()
+
+        if not cleaned_loop_id:
+            raise ValueError("Verification loop id is required")
+        if not cleaned_reporter:
+            raise ValueError("Reporter name is required")
+        if not any([cleaned_command, cleaned_output, cleaned_url, cleaned_notes]):
+            raise ValueError(
+                "Evidence must include at least one of command, output, url, or notes"
+            )
+
+        with self._lock:
+            record = self._load_unlocked(cleaned_loop_id)
+            allowed_reporters = {
+                str(record.get("owner", "")),
+                str(record.get("tester", "")),
+                str(record.get("lead", "")),
+            }
+            if cleaned_reporter not in allowed_reporters:
+                raise ValueError(
+                    f"Reporter '{cleaned_reporter}' is not authorized for loop {cleaned_loop_id}"
+                )
+
+            attempts = record.get("attempts") or []
+            if not attempts:
+                raise ValueError(f"Loop {cleaned_loop_id} has no pending verification attempts")
+
+            attempt = dict(attempts[-1])
+            if attempt.get("result") is not None:
+                raise ValueError(
+                    f"Loop {cleaned_loop_id} attempt {attempt.get('attempt')} already has a result"
+                )
+
+            evidence = list(attempt.get("evidence") or [])
+            entry = {
+                "type": cleaned_type,
+                "command": cleaned_command,
+                "output": self._normalize_evidence_output(cleaned_output),
+                "url": cleaned_url,
+                "exitCode": int(exit_code) if exit_code is not None else None,
+                "notes": cleaned_notes,
+                "reportedBy": cleaned_reporter,
+                "reportedAt": self._utc_now(),
+            }
+            evidence.append(entry)
+            attempt["evidence"] = evidence
+            attempts[-1] = attempt
+            record["attempts"] = attempts
+            record["updatedAt"] = self._utc_now()
+            self._save_unlocked(record)
+
+        self._emit_event(
+            "verification.evidence.recorded",
+            {
+                "loop_id": cleaned_loop_id,
+                "attempt": attempt.get("attempt"),
+                "reporter": cleaned_reporter,
+                "evidence_type": cleaned_type,
+            },
+        )
+        return record
+
     def report_result(
         self,
         loop_id: str,
@@ -173,6 +270,28 @@ class VerificationLoopManager:
                 raise ValueError(
                     f"Loop {cleaned_loop_id} attempt {attempt['attempt']} already has a result"
                 )
+
+            evidence = list(attempt.get("evidence") or [])
+            if passed:
+                tester_evidence = [
+                    entry for entry in evidence if entry.get("reportedBy") == cleaned_tester
+                ]
+                if not tester_evidence:
+                    raise ValueError(
+                        "Passing verification requires evidence recorded by the tester. "
+                        "Use record_test_evidence before reporting pass."
+                    )
+                requires_ui_check = bool(record.get("requiresUiCheck"))
+                if requires_ui_check:
+                    ui_evidence = [
+                        entry for entry in tester_evidence
+                        if str(entry.get("type", "")).lower() == "ui_check"
+                    ]
+                    if not ui_evidence:
+                        raise ValueError(
+                            "Passing frontend verification requires ui_check evidence. "
+                            "Run ui_check and record_test_evidence with evidence_type='ui_check'."
+                        )
 
             attempt["result"] = {
                 "passed": bool(passed),
@@ -241,6 +360,7 @@ class VerificationLoopManager:
                 "owner": str(record["owner"]),
                 "tester": cleaned_tester,
                 "task_id": record.get("taskId"),
+                "evidence_count": len(evidence),
             },
         )
         return record
@@ -292,6 +412,10 @@ class VerificationLoopManager:
     def _verification_request_message(record: dict[str, Any], attempt: dict[str, Any]) -> str:
         detail = str(attempt.get("details") or "").strip()
         detail_block = f"\nDetails: {detail}" if detail else ""
+        test_plan = str(record.get("testPlan") or "").strip()
+        plan_block = f"\nTest plan: {test_plan}" if test_plan else ""
+        ui_flag = "yes" if record.get("requiresUiCheck") else "no"
+        ui_block = f"\nRequires ui_check: {ui_flag}"
         task_id = record.get("taskId")
         task_block = f"\nTask: #{task_id}" if task_id is not None else ""
         return (
@@ -299,6 +423,8 @@ class VerificationLoopManager:
             f"Subject: {record['subject']}"
             f"{task_block}"
             f"{detail_block}"
+            f"{plan_block}"
+            f"{ui_block}"
         )
 
     @staticmethod
@@ -317,10 +443,12 @@ class VerificationLoopManager:
     @staticmethod
     def _verification_pass_message(record: dict[str, Any], attempt: dict[str, Any]) -> str:
         result = attempt.get("result") or {}
+        evidence_count = len(attempt.get("evidence") or [])
         return (
             f"Verification passed loop={record['loopId']} attempt={attempt['attempt']}\n"
             f"Subject: {record['subject']}\n"
-            f"Summary: {result.get('summary', '')}"
+            f"Summary: {result.get('summary', '')}\n"
+            f"Evidence items: {evidence_count}"
         )
 
     def _path(self, loop_id: str) -> Path:
@@ -346,6 +474,14 @@ class VerificationLoopManager:
             self.event_sink.emit(event_type, payload)
         except Exception:
             return
+
+    @staticmethod
+    def _normalize_evidence_output(output: str) -> str:
+        if not output:
+            return ""
+        if len(output) <= _MAX_EVIDENCE_OUTPUT_CHARS:
+            return output
+        return output[:_MAX_EVIDENCE_OUTPUT_CHARS] + "... (truncated)"
 
     @staticmethod
     def _utc_now() -> str:

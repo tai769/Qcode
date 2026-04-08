@@ -3,11 +3,49 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-if [[ -f "$ROOT_DIR/.venv/bin/python" ]]; then
-  if [[ -f "$ROOT_DIR/.venv/bin/qcode" ]]; then
-    exec "$ROOT_DIR/.venv/bin/qcode" --workdir "$ROOT_DIR" "$@"
-  fi
-  exec "$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/agent_loop.py" --workdir "$ROOT_DIR" "$@"
+VENV_DIR="$ROOT_DIR/.venv"
+MARKER_FILE="$VENV_DIR/.deps-installed"
+PYTHON_BIN="$(command -v python3 || true)"
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "Error: python3 not found. Please install Python 3.9+" >&2
+  echo "Install with: brew install python3" >&2
+  exit 1
 fi
 
-exec python3 "$ROOT_DIR/agent_loop.py" --workdir "$ROOT_DIR" "$@"
+PYTHON_VERSION_MAJOR=$($PYTHON_BIN -c "import sys; print(sys.version_info.major)")
+PYTHON_VERSION_MINOR=$($PYTHON_BIN -c "import sys; print(sys.version_info.minor)")
+if (( $PYTHON_VERSION_MAJOR < 3 )) || (( $PYTHON_VERSION_MAJOR == 3 && $PYTHON_VERSION_MINOR < 9 )); then
+  echo "Error: Python 3.9+ required, found $PYTHON_VERSION_MAJOR.$PYTHON_VERSION_MINOR" >&2
+  exit 1
+fi
+
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "Creating virtual environment..."
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
+fi
+
+if [[ ! -f "$MARKER_FILE" ]]; then
+  echo "Installing dependencies..."
+  export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+  
+  if "$VENV_DIR/bin/pip" install --quiet -e "$ROOT_DIR"; then
+    touch "$MARKER_FILE"
+    echo "Dependencies installed."
+  else
+    echo "Error: Failed to install dependencies" >&2
+    echo "Please check your network or install manually:" >&2
+    echo "  source $VENV_DIR/bin/activate" >&2
+    echo "  pip install -e $ROOT_DIR" >&2
+    exit 1
+  fi
+fi
+
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
+# Use agent_loop.py as the entry point
+exec "$VENV_DIR/bin/python" "$ROOT_DIR/agent_loop.py" "$@"

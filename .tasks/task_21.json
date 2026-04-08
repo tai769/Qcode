@@ -1,0 +1,11 @@
+{
+  "id": 21,
+  "subject": "UI/UX设计规范与视觉系统",
+  "description": "设计玻璃态3D风格的视觉系统：颜色方案（渐变模糊）、玻璃态卡片样式规范、3D流体背景设计、动画交互规范（Framer Motion）、发光边框效果、字体排版规范、组件边界定义。产出设计规范文档和原型参考。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "designer",
+  "requiredRole": "designer",
+  "createdAt": "2026-04-06T14:03:07.694675+00:00",
+  "updatedAt": "2026-04-06T15:17:23.093897+00:00"
+}

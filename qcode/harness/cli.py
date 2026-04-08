@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import os
+import select
 import sys
 import threading
 import time
@@ -16,13 +18,23 @@ from qcode.runtime.session import ConversationSession
 try:
     import readline
 
-    readline.parse_and_bind("set bind-tty-special-chars off")
+    readline.parse_and_bind("set bind-tty-special-chars on")
     readline.parse_and_bind("set input-meta on")
     readline.parse_and_bind("set output-meta on")
     readline.parse_and_bind("set convert-meta off")
     readline.parse_and_bind("set enable-meta-keybindings on")
 except ImportError:
     readline = None
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+
+_RUN_TIME_WARNING_INTERVAL_SECONDS = 300.0
+_PASTE_BURST_READ_SECONDS = 0.5
+_PASTE_BURST_POLL_SECONDS = 0.01
 
 
 class CliHarness:
@@ -56,15 +68,25 @@ class CliHarness:
 
     def run_interactive(self) -> None:
         session = ConversationSession()
+        self._disable_bracketed_paste()
 
         while True:
             try:
-                query = input("\033[36mQcode >> \033[0m")
-            except (EOFError, KeyboardInterrupt):
+                query = self._read_query()
+            except KeyboardInterrupt:
+                print("\nInput canceled.", file=self.stream)
+                continue
+            except EOFError:
                 break
 
-            if query.strip().lower() in {"q", "exit", ""}:
+            if query is None:
                 break
+
+            normalized = query.strip().lower()
+            if normalized in {"q", "exit"}:
+                break
+            if not normalized:
+                continue
 
             if query.strip().startswith("/"):
                 output = self._handle_slash_command(query.strip())
@@ -81,6 +103,90 @@ class CliHarness:
                 print(f"Error: {exc}", file=self.stream)
             print(file=self.stream)
 
+    def _read_query(self) -> Optional[str]:
+        self._disable_bracketed_paste()
+        line = input("Qcode >> ")
+        extra = self._drain_paste_burst()
+        if not extra:
+            return line
+        return f"{line}\n{extra}"
+
+    def _drain_paste_burst(self) -> str:
+        if not getattr(sys.stdin, "isatty", lambda: False)():
+            return ""
+        if fcntl is None:
+            return self._drain_paste_burst_select()
+        return self._drain_paste_burst_nonblocking()
+
+    def _drain_paste_burst_nonblocking(self) -> str:
+        fd = sys.stdin.fileno()
+        try:
+            original_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        except Exception:
+            return ""
+
+        buffer = bytearray()
+        try:
+            fcntl.fcntl(fd, fcntl.F_SETFL, original_flags | os.O_NONBLOCK)
+            deadline = time.monotonic() + _PASTE_BURST_READ_SECONDS
+            while time.monotonic() < deadline:
+                try:
+                    chunk = os.read(fd, 4096)
+                except BlockingIOError:
+                    time.sleep(_PASTE_BURST_POLL_SECONDS)
+                    continue
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+                deadline = time.monotonic() + _PASTE_BURST_READ_SECONDS
+        finally:
+            try:
+                fcntl.fcntl(fd, fcntl.F_SETFL, original_flags)
+            except Exception:
+                pass
+
+        if not buffer:
+            return ""
+        text = buffer.decode(errors="replace")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        return "\n".join(text.splitlines())
+
+    def _drain_paste_burst_select(self) -> str:
+        if not self._stdin_ready(0.0):
+            return ""
+
+        deadline = time.monotonic() + _PASTE_BURST_READ_SECONDS
+        chunks: List[str] = []
+        while True:
+            if time.monotonic() >= deadline:
+                break
+            if not self._stdin_ready(_PASTE_BURST_POLL_SECONDS):
+                continue
+            extra = sys.stdin.readline()
+            if extra == "":
+                break
+            chunks.append(extra.rstrip("\n"))
+            deadline = time.monotonic() + _PASTE_BURST_READ_SECONDS
+        return "\n".join(chunks)
+
+    @staticmethod
+    def _stdin_ready(timeout_seconds: float) -> bool:
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], timeout_seconds)
+        except (ValueError, OSError):
+            return False
+        return bool(ready)
+
+    def _disable_bracketed_paste(self) -> None:
+        is_tty = bool(getattr(self.stream, "isatty", lambda: False)())
+        if not is_tty:
+            return
+        try:
+            self.stream.write("\x1b[?2004l")
+            self.stream.flush()
+        except Exception:
+            pass
+
     def run_once(
         self,
         query: str,
@@ -90,9 +196,15 @@ class CliHarness:
         self._streaming_text_active = False
         active_session.add_user_text(query)
         self._progress.start("思考中")
+        runtime_monitor = _RunTimeMonitor(
+            stream=sys.stderr,
+            interval_seconds=_RUN_TIME_WARNING_INTERVAL_SECONDS,
+        )
+        runtime_monitor.start()
         try:
             self.engine.run(active_session)
         finally:
+            runtime_monitor.stop()
             self._progress.stop()
 
         assistant_message = active_session.last_assistant_message()
@@ -363,3 +475,34 @@ class _CliProgressReporter:
         self.stream.write(text)
         self.stream.write("\n")
         self.stream.flush()
+
+
+class _RunTimeMonitor:
+    def __init__(self, stream: TextIO, interval_seconds: float) -> None:
+        self.stream = stream
+        self.interval_seconds = interval_seconds
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._started_at = 0.0
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._started_at = time.monotonic()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        thread = self._thread
+        self._thread = None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self.interval_seconds):
+            elapsed = time.monotonic() - self._started_at
+            minutes = int(elapsed // 60)
+            seconds = int(elapsed % 60)
+            print(f"[TIME] 已运行 {minutes}分{seconds}秒", file=self.stream, flush=True)

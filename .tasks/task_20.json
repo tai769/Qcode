@@ -1,0 +1,11 @@
+{
+  "id": 20,
+  "subject": "博客技术架构设计",
+  "description": "设计整体技术架构：前端（Next.js 14 + TypeScript + Tailwind + shadcn/ui + R3F + Framer Motion）、后端（API设计、数据库方案、数据模型）、部署方案（Vercelvercel）。定义数据流、状态管理、性能优化策略。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "architect",
+  "requiredRole": "architect",
+  "createdAt": "2026-04-06T14:02:42.156593+00:00",
+  "updatedAt": "2026-04-06T15:17:15.139348+00:00"
+}

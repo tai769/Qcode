@@ -1,0 +1,11 @@
+{
+  "id": 22,
+  "subject": "前端基础设施搭建",
+  "description": "初始化Next.js 14项目，配置TypeScript、Tailwind CSS、shadcn/ui、React Three Fiber、Framer Motion。设置项目结构、ESLint、Prettier、路径别名、基础路由。创建3D背景组件、玻璃态卡片基础组件、动画Hook。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "frontend",
+  "requiredRole": "frontend",
+  "createdAt": "2026-04-06T14:03:18.185625+00:00",
+  "updatedAt": "2026-04-06T15:17:23.110170+00:00"
+}

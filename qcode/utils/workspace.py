@@ -62,10 +62,18 @@ class Workspace:
             output = f"{output}\n[exit code: {result.returncode}]"
         return output[: self.max_output_chars]
 
-    def read_text(self, relative_path: str, limit: Optional[int] = None) -> str:
+    def read_text(
+        self,
+        relative_path: str,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> str:
         raw = self.safe_path(relative_path).read_bytes()
         text = self._decode_bytes(raw)
         lines = text.splitlines()
+        start = max(0, int(offset or 0))
+        if start:
+            lines = lines[start:]
         if limit is not None and limit < len(lines):
             lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
         return "\n".join(lines)[: self.max_output_chars]

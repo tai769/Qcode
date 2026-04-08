@@ -1,0 +1,11 @@
+{
+  "id": 27,
+  "subject": "3D流体背景与视觉特效优化",
+  "description": "使用React Three Fiber实现3D流体背景：粒子系统、渐变变形、鼠标交互响应。优化性能（降低多边形、LOD、懒加载）。实现全局发光边框组件、渐变模糊背景、页面过渡动画。确保在不同设备上的性能表现。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "frontend",
+  "requiredRole": "frontend",
+  "createdAt": "2026-04-06T14:04:03.848581+00:00",
+  "updatedAt": "2026-04-06T15:17:23.156268+00:00"
+}

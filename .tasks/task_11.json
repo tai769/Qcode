@@ -1,0 +1,11 @@
+{
+  "id": 11,
+  "subject": "搭建Next.js基础项目结构",
+  "description": "初始化Next.js 14项目，配置TypeScript、Tailwind、ESLint、PostCSS。创建项目目录结构：app、components、lib、types、styles等。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T13:32:30.657436+00:00",
+  "updatedAt": "2026-04-06T15:17:10.743309+00:00"
+}

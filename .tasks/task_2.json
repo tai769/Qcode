@@ -1,0 +1,11 @@
+{
+  "id": 2,
+  "subject": "完善任务看板功能 - 实现CRUD和状态管理",
+  "description": "实现Task看板的完整功能：创建、认领、释放、更新状态、删除任务。需要：\n1. 完善backend_server的Task模型和API端点（/api/tasks）\n2. 更新frontend/src/stores/taskStore调用真实API\n3. 实现拖拽或按钮式任务状态切换\n4. 添加任务过滤和排序功能\n依赖：后端Task API端点",
+  "status": "pending",
+  "blockedBy": [],
+  "owner": "",
+  "requiredRole": "frontend",
+  "createdAt": "2026-04-05T16:59:52.917221+00:00",
+  "updatedAt": "2026-04-05T16:59:52.917221+00:00"
+}

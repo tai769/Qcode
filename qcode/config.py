@@ -26,6 +26,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _resolve_event_log_path(value: Optional[str], workdir: Path) -> Optional[Path]:
+    if value is None:
+        return _resolve_optional_path(".qcode/events.jsonl", workdir)
+
+    cleaned = value.strip().lower()
+    if not cleaned or cleaned in {"0", "false", "off", "none"}:
+        return None
+    return _resolve_optional_path(value, workdir)
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Runtime configuration for the Qcode harness."""
@@ -143,7 +153,7 @@ class AppConfig:
                 os.getenv("QCODE_TEAM_DIR", ".team"),
                 resolved_workdir,
             ),
-            event_log_path=_resolve_optional_path(
+            event_log_path=_resolve_event_log_path(
                 os.getenv("QCODE_EVENT_LOG_PATH"),
                 resolved_workdir,
             ),

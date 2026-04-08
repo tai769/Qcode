@@ -1,0 +1,11 @@
+{
+  "id": 9,
+  "subject": "设计博客项目架构",
+  "description": "设计Next.js 14 + TypeScript + Tailwind + shadcn/ui + React Three Fiber + Framer Motion的博客项目架构。包括：项目结构、组件分层、状态管理、路由设计、3D背景集成方案。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "architect",
+  "requiredRole": "architect",
+  "createdAt": "2026-04-06T13:31:54.047959+00:00",
+  "updatedAt": "2026-04-06T13:41:38.928949+00:00"
+}

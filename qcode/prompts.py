@@ -17,7 +17,7 @@ def build_system_prompt(workdir: Path) -> str:
         "Use background_run for long-running shell commands so you can keep working while they execute.\n"
         "Use set_goal to pin the active mission before delegating. Use get_goal to re-anchor yourself after long tool chains, handoffs, or compaction.\n"
         "Use spawn_teammate when a persistent specialist would help. Coordinate teammates with send_message, broadcast, list_teammates, and inbox messages.\n"
-        "Use request_verification and report_verification_result to run durable coder->tester->coder loops until smoke or acceptance checks pass.\n"
+        "Use request_verification, record_test_evidence, and report_verification_result to run durable coder->tester->coder loops until smoke or acceptance checks pass. Verification passes must include evidence. For frontend/UI work set requires_ui_check=true and require ui_check evidence.\n"
         "Teammates are autonomous: they can enter idle mode, poll for inbox work, and auto-claim ready unowned tasks from the task graph.\n"
         "Use shutdown_request for graceful shutdown handshakes and review_plan for high-risk work proposed by teammates.\n"
         "Use the compact tool if the conversation becomes noisy or too long.\n"
@@ -50,13 +50,15 @@ def build_teammate_system_prompt(workdir: Path, name: str, role: str) -> str:
     verification_guidance = ""
     if role.strip().lower() == "coder":
         verification_guidance = (
-            "After implementing or fixing a meaningful chunk, use request_verification to hand work to tester with a clear smoke or acceptance focus. "
+            "After implementing or fixing a meaningful chunk, use request_verification with a concrete test plan or commands for the tester. "
+            "If the work is frontend/UI, set requires_ui_check=true. "
             "If tester reports failures, fix them and resubmit with the same loop id.\n"
         )
     elif role.strip().lower() == "tester":
         verification_guidance = (
-            "When you receive a verification request, run focused checks and use report_verification_result. "
-            "If the build is not really good enough, fail it with concrete repro details.\n"
+            "When you receive a verification request, run focused checks, record evidence with record_test_evidence, then use report_verification_result. "
+            "Use ui_check and record_test_evidence with evidence_type='ui_check' for frontend/UI verification. Verification passes require evidence. "
+            "If the build is not good enough, fail it with concrete repro details.\n"
         )
     prompt = (
         f"You are teammate '{name}', role: {role}, working at {workdir}.\n"

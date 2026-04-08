@@ -5,6 +5,11 @@ Summary: CLI coding agent harness with an OpenAI-compatible tool loop
 Requires-Python: >=3.9
 Description-Content-Type: text/markdown
 Requires-Dist: requests>=2.31.0
+Requires-Dist: tomli>=2.0.1; python_version < "3.11"
+Requires-Dist: fastapi>=0.109.0
+Requires-Dist: uvicorn[standard]>=0.27.0
+Requires-Dist: pydantic>=2.6.0
+Requires-Dist: starlette>=0.35.0
 
 # Qcode
 
@@ -180,6 +185,57 @@ QCODE_TASK_DIR=.tasks
 
 如果你接的是 `responses` 风格接口，而不是传统 `chat/completions`，把 `QCODE_API_WIRE_API` 设为 `responses` 即可。当前 Qcode 采用 Claude Code 风格的 `history replay`：仍然使用 `SSE`，但每轮由客户端显式重放必要历史，不依赖 `previous_response_id` 这类 provider-managed thread 机制。像 `gpt-5.x` 一类模型若支持 reasoning / verbosity，也可以通过 `QCODE_MODEL_REASONING_EFFORT` 和 `QCODE_MODEL_VERBOSITY` 传入。
 
+如果你想像很多中转站那样维护多个模型配置，Qcode 现在也支持工作区本地的：
+
+- `.qcode/config.toml`
+- `.qcode/auth.json`
+
+其中：
+
+- `config.toml` 放 profile、模型名、base URL、wire API 和默认参数
+- `auth.json` 放独立认证信息
+- `.env` 仍然保留兼容；没有 TOML profile 时会继续按 `.env` 运行
+
+示例：
+
+```toml
+version = 1
+active_profile = "default"
+
+[defaults]
+max_tokens = 8000
+request_timeout = 60
+
+[profiles.default]
+base_url = "https://right.codes/codex/v1"
+model = "gpt-5.2"
+api_wire_api = "responses"
+reasoning_effort = "xhigh"
+verbosity = "high"
+disable_response_storage = true
+auth = "default"
+
+[profiles.fast]
+base_url = "https://right.codes/codex/v1"
+model = "gpt-4o-mini"
+api_wire_api = "responses"
+reasoning_effort = "low"
+verbosity = "low"
+disable_response_storage = true
+auth = "default"
+```
+
+```json
+{
+  "version": 1,
+  "auth": {
+    "default": {
+      "api_key": "your_api_key_here"
+    }
+  }
+}
+```
+
 当前 compaction 已经升级成“摘要 + 最近原文锚点”模式：
 
 - `QCODE_MAX_CONTEXT_WINDOW`：Budgeter 计算时使用的上下文窗口上限
@@ -231,9 +287,18 @@ qcode --once "先看看这个项目现在实现到哪了"
 
 ```bash
 qcode --workdir /path/to/project
+qcode --profile fast
+qcode --list-models
 qcode --model gpt-4o-mini
 qcode --max-tokens 12000
 ```
+
+交互模式下还支持：
+
+- `/models`：列出可用 profile
+- `/model`：查看当前模型
+- `/model fast`：切换到某个 profile
+- `/model gpt-5.2`：如果某个 profile 的模型名唯一，也可以按模型名切换
 
 ## 当前内置工具
 

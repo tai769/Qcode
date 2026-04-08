@@ -1,0 +1,11 @@
+{
+  "id": 34,
+  "subject": "增强 3D流体背景效果",
+  "description": "在现有粒子效果基础上，添加鼠标交互响应，考虑添加流体波浪效果提升视觉冲击力",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T14:21:12.691338+00:00",
+  "updatedAt": "2026-04-06T15:12:33.065951+00:00"
+}

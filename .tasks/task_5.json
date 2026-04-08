@@ -1,0 +1,11 @@
+{
+  "id": 5,
+  "subject": "完善设置与连接管理 - API配置和测试",
+  "description": "实现Settings面板的连接配置：API URL配置、连接测试、主题切换。需要：\n1. 保存API URL到localStorage\n2. 实现连接测试按钮（调用/health）\n3. 主题切换（亮/暗模式）\n4. 显示当前连接状态和版本信息\n依赖：后端/health端点（已实现）",
+  "status": "pending",
+  "blockedBy": [],
+  "owner": "",
+  "requiredRole": "frontend",
+  "createdAt": "2026-04-05T16:59:52.925344+00:00",
+  "updatedAt": "2026-04-05T16:59:52.925344+00:00"
+}

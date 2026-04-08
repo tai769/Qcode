@@ -1,0 +1,11 @@
+{
+  "id": 32,
+  "subject": "添加页脚组件",
+  "description": "实现底部页脚，包含版权信息、社交链接，使用毛玻璃效果固定在底部",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T14:21:12.686471+00:00",
+  "updatedAt": "2026-04-06T14:54:59.656577+00:00"
+}

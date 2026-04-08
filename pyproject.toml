@@ -10,12 +10,17 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "requests>=2.31.0",
-    'tomli>=2.0.1; python_version < "3.11"',
+    'tomli>=2.0.1; python_version <"3.11"',
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.6.0",
+    "starlette>=0.35.0",
 ]
 
 [project.scripts]
 qcode = "qcode.harness.cli:main"
 qoder = "qcode.harness.cli:main"
+qcode-api = "scripts.run_api_server:main"
 
 [tool.setuptools.packages.find]
 include = ["qcode*"]

@@ -1,3 +1,4 @@
 [console_scripts]
 qcode = qcode.harness.cli:main
+qcode-api = scripts.run_api_server:main
 qoder = qcode.harness.cli:main

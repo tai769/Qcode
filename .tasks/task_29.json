@@ -1,0 +1,11 @@
+{
+  "id": 29,
+  "subject": "设计并实现博客导航栏组件（毛玻璃风格）",
+  "description": "实现顶部固定导航栏，包含 Logo、首页/文章/关于链接，使用 GlassCard 风格的毛玻璃效果，支持移动端响应式菜单",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T14:21:12.679097+00:00",
+  "updatedAt": "2026-04-06T14:55:05.644125+00:00"
+}

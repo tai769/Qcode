@@ -1,0 +1,11 @@
+{
+  "id": 19,
+  "subject": "博客产品需求与信息架构设计",
+  "description": "定义博客的核心功能需求、信息架构、页面结构、交互流。包括：首页、文章详情页、分类/标签页、关于页、后台管理（可选）。明确MVP范围和功能优先级。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "pm",
+  "requiredRole": "product_manager",
+  "createdAt": "2026-04-06T14:02:34.040844+00:00",
+  "updatedAt": "2026-04-06T14:28:37.274607+00:00"
+}

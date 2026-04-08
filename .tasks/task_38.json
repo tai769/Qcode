@@ -1,0 +1,11 @@
+{
+  "id": 38,
+  "subject": "代码结构化重构",
+  "description": "将现有代码重构为更模块化的结构：1) 提取可复用的Hook（useGlassEffect、use3DInteraction、useScrollProgress）；2) 统一常量管理（colors.ts、animations.ts、breakpoints.ts）；3) 创建组件类型定义文件（components.types.ts）；4) 优化组件导出结构（统一index.ts）；5) 分离样式和逻辑",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T15:57:51.969199+00:00",
+  "updatedAt": "2026-04-06T16:56:14.727934+00:00"
+}

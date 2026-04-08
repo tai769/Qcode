@@ -1,0 +1,11 @@
+{
+  "id": 8,
+  "subject": "创建Docker Compose一键部署环境",
+  "description": "创建docker-compose.yml实现一键启动：\n1. frontend镜像（Node.js + Vite）\n2. backend镜像（Python + FastAPI）\n3. PostgreSQL数据库服务\n4. Redis缓存服务（可选）\n5. 网络配置和服务依赖\n6. 环境变量配置（.env.example）\n目标：一键 ./docker-up.sh 启动完整开发环境",
+  "status": "in_progress",
+  "blockedBy": [],
+  "owner": "devops",
+  "requiredRole": "devops",
+  "createdAt": "2026-04-05T16:59:52.929590+00:00",
+  "updatedAt": "2026-04-06T13:33:55.291905+00:00"
+}

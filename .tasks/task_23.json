@@ -1,0 +1,11 @@
+{
+  "id": 23,
+  "subject": "后端API与数据层开发",
+  "description": "实现博客后端API：文章CRUD、分类/标签管理、Markdown渲染支持。设计数据模型（文章、分类、标签、评论）。可以选择使用Next.js API Routes + JSON文件存储或轻量级数据库（如SQLite/PlanetScale）。实现数据验证和错误处理。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "backend",
+  "requiredRole": "backend",
+  "createdAt": "2026-04-06T14:03:24.989209+00:00",
+  "updatedAt": "2026-04-06T15:17:23.126028+00:00"
+}

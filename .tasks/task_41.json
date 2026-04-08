@@ -1,0 +1,11 @@
+{
+  "id": 41,
+  "subject": "页面性能优化",
+  "description": "优化页面加载和渲染性能：1) 优化图片加载（Next.js Image、懒加载、占位符）；2) 代码分割优化（动态导入、路由级分割）；3) 减少初始bundle大小（tree-shaking、依赖优化）；4) 优化3D场景性能（按需渲染、视口检测）；5) 实现虚拟滚动（长列表优化）；6) 添加性能监控（Core Web Vitals）",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T15:58:19.771235+00:00",
+  "updatedAt": "2026-04-06T16:56:14.752506+00:00"
+}

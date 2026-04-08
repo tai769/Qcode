@@ -1,0 +1,11 @@
+{
+  "id": 13,
+  "subject": "实现Framer Motion动画组件",
+  "description": "使用Framer Motion实现平滑滚动动画、页面切换动画、元素入场动画、悬浮效果。创建动画工具函数和可复用组件。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T13:32:51.544919+00:00",
+  "updatedAt": "2026-04-06T15:17:10.775381+00:00"
+}

@@ -1,0 +1,11 @@
+{
+  "id": 24,
+  "subject": "核心页面开发：首页与文章列表",
+  "description": "实现博客首页：Hero区域（3D背景）、文章卡片列表（玻璃态风格）、分类/标签筛选、平滑滚动动画。使用shadcn/ui组件库，应用发光边框和悬浮效果。集成后端API获取文章数据。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "frontend",
+  "requiredRole": "frontend",
+  "createdAt": "2026-04-06T14:03:31.670669+00:00",
+  "updatedAt": "2026-04-06T15:17:23.134112+00:00"
+}

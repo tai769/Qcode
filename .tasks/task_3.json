@@ -1,0 +1,11 @@
+{
+  "id": 3,
+  "subject": "完善团队协作面板 - 实时状态同步",
+  "description": "实现Team协作面板的实时功能：成员列表、在线状态、消息通知。需要：\n1. 后端WebSocket/SSE推送成员状态变更\n2. 前端teamStore实时更新机制\n3. 成员头像和状态指示器\n4. 简单的团队成员聊天功能\n依赖：后端WebSocket支持",
+  "status": "pending",
+  "blockedBy": [],
+  "owner": "",
+  "requiredRole": "frontend",
+  "createdAt": "2026-04-05T16:59:52.922661+00:00",
+  "updatedAt": "2026-04-05T16:59:52.922661+00:00"
+}

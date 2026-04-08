@@ -1,0 +1,11 @@
+{
+  "id": 25,
+  "subject": "文章详情页与Markdown渲染",
+  "description": "实现文章详情页：Markdown内容渲染（使用react-markdown）、代码高亮（highlight.js）、文章元数据展示、上一篇/下一篇导航、评论功能（可选）。应用玻璃态风格和平滑进入动画。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "frontend",
+  "requiredRole": "frontend",
+  "createdAt": "2026-04-06T14:03:42.708893+00:00",
+  "updatedAt": "2026-04-06T15:17:23.141480+00:00"
+}

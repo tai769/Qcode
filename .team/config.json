@@ -9,12 +9,22 @@
     {
       "name": "architect",
       "role": "architect",
-      "status": "working"
+      "status": "idle"
     },
     {
       "name": "ui_designer",
       "role": "ui_designer",
-      "status": "working"
+      "status": "idle"
+    },
+    {
+      "name": "developer",
+      "role": "developer",
+      "status": "idle"
+    },
+    {
+      "name": "tester",
+      "role": "tester",
+      "status": "idle"
     },
     {
       "name": "coder",
@@ -27,8 +37,18 @@
       "status": "idle"
     },
     {
-      "name": "tester",
-      "role": "tester",
+      "name": "backend",
+      "role": "backend",
+      "status": "idle"
+    },
+    {
+      "name": "devops",
+      "role": "devops",
+      "status": "idle"
+    },
+    {
+      "name": "dba",
+      "role": "dba",
       "status": "idle"
     }
   ]

@@ -1,0 +1,11 @@
+{
+  "id": 14,
+  "subject": "实现玻璃态UI组件",
+  "description": "根据设计稿实现玻璃态组件：GlassCard（毛玻璃卡片）、NeonBorder（发光边框）、GradientBlur（渐变模糊背景）。需要支持hover效果和动画。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T13:33:02.752145+00:00",
+  "updatedAt": "2026-04-06T15:17:10.779324+00:00"
+}

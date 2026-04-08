@@ -1,0 +1,11 @@
+{
+  "id": 15,
+  "subject": "实现博客核心页面",
+  "description": "实现首页（文章列表）、文章详情页、关于页面。需要集成3D背景、玻璃态卡片、动画效果。使用mock数据实现完整的页面结构。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T13:33:12.739476+00:00",
+  "updatedAt": "2026-04-06T15:17:10.783661+00:00"
+}

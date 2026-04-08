@@ -38,6 +38,16 @@ DEFAULT_TEAM_MEMBERS = [
         "role": "tester",
         "status": "idle",
     },
+    {
+        "name": "devops",
+        "role": "devops",
+        "status": "idle",
+    },
+    {
+        "name": "dba",
+        "role": "dba",
+        "status": "idle",
+    },
 ]
 
 
@@ -69,6 +79,14 @@ ROLE_GUIDANCE = {
     "tester": (
         "Verify user-facing behavior, validate regressions, and report concrete failures"
         " with reproduction notes."
+    ),
+    "devops": (
+        "Own runtime environment reliability: ports, processes, containers, deploys, and"
+        " health checks. Use port_inspect/port_kill for port conflicts and keep services stable."
+    ),
+    "dba": (
+        "Own data layer integrity: schema migrations, backups/restores, and database"
+        " health checks for local or containerized databases."
     ),
 }
 

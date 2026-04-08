@@ -1,0 +1,11 @@
+{
+  "id": 33,
+  "subject": "优化平滑滚动和页面过渡动画",
+  "description": "使用 Framer Motion 的 AnimatePresence 实现页面切换平滑过渡，优化滚动体验",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T14:21:12.688932+00:00",
+  "updatedAt": "2026-04-06T15:12:23.577322+00:00"
+}

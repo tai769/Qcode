@@ -1,0 +1,11 @@
+{
+  "id": 31,
+  "subject": "创建关于页面",
+  "description": "实现 /about 个人介绍页面，包含头像、技能标签、联系方式，使用玻璃态卡片布局",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "developer",
+  "requiredRole": "developer",
+  "createdAt": "2026-04-06T14:21:12.683662+00:00",
+  "updatedAt": "2026-04-06T14:54:59.631212+00:00"
+}

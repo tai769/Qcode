@@ -1,0 +1,11 @@
+{
+  "id": 10,
+  "subject": "设计UI组件和视觉风格",
+  "description": "设计玻璃态3D风格的UI组件库：毛玻璃卡片、悬浮发光边框、渐变模糊背景、颜色方案、字体排版规范。输出Figma设计稿或组件规范文档。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "ui_designer",
+  "requiredRole": "ui_designer",
+  "createdAt": "2026-04-06T13:32:15.375937+00:00",
+  "updatedAt": "2026-04-06T13:42:35.096993+00:00"
+}

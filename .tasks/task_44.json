@@ -1,0 +1,13 @@
+{
+  "id": 44,
+  "subject": "功能回归测试",
+  "description": "验证优化后的功能完整性：1) 所有页面渲染测试；2) 3D背景效果验证；3) 动画流畅度测试；4) 性能指标检查（Lighthouse、Core Web Vitals）；5) 响应式布局验证；6) 浏览器兼容性测试；7) 生成测试报告",
+  "status": "in_progress",
+  "blockedBy": [
+    42
+  ],
+  "owner": "tester",
+  "requiredRole": "tester",
+  "createdAt": "2026-04-06T15:58:33.542182+00:00",
+  "updatedAt": "2026-04-06T16:51:31.458983+00:00"
+}

@@ -1,0 +1,11 @@
+{
+  "id": 28,
+  "subject": "测试与质量保证",
+  "description": "编写单元测试和集成测试，测试核心功能：API调用、组件渲染、路由导航、响应式布局。进行性能测试（Lighthouse、Core Web Vitals）、浏览器兼容性测试、无障碍性检查。修复发现的bug。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "qa",
+  "requiredRole": "qa",
+  "createdAt": "2026-04-06T14:04:17.606871+00:00",
+  "updatedAt": "2026-04-06T15:17:23.162636+00:00"
+}

@@ -1,0 +1,11 @@
+{
+  "id": 17,
+  "subject": "集成测试：E2E测试",
+  "description": "使用Playwright进行端到端测试：导航、页面加载、文章列表跳转、3D背景渲染、动画效果、响应式布局。覆盖所有核心用户流程。",
+  "status": "completed",
+  "blockedBy": [],
+  "owner": "tester",
+  "requiredRole": "tester",
+  "createdAt": "2026-04-06T13:33:29.297990+00:00",
+  "updatedAt": "2026-04-06T15:17:10.793284+00:00"
+}

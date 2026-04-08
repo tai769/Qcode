@@ -3,6 +3,7 @@ pyproject.toml
 qcode/__init__.py
 qcode/app.py
 qcode/config.py
+qcode/config_profiles.py
 qcode/prompts.py
 qcode/team_defaults.py
 qcode/user_profile.py
@@ -12,6 +13,9 @@ qcode.egg-info/dependency_links.txt
 qcode.egg-info/entry_points.txt
 qcode.egg-info/requires.txt
 qcode.egg-info/top_level.txt
+qcode/api/__init__.py
+qcode/api/__initmain__.py
+qcode/api/server.py
 qcode/harness/__init__.py
 qcode/harness/cli.py
 qcode/providers/__init__.py
@@ -28,6 +32,8 @@ qcode/runtime/compaction_middleware.py
 qcode/runtime/context.py
 qcode/runtime/context_budgeter.py
 qcode/runtime/engine.py
+qcode/runtime/goal_middleware.py
+qcode/runtime/goal_store.py
 qcode/runtime/middleware.py
 qcode/runtime/session.py
 qcode/runtime/subagent.py
@@ -39,6 +45,7 @@ qcode/runtime/todo_middleware.py
 qcode/runtime/todos.py
 qcode/runtime/tool_executor.py
 qcode/runtime/types.py
+qcode/runtime/verification_loops.py
 qcode/telemetry/__init__.py
 qcode/telemetry/events.py
 qcode/tools/__init__.py
@@ -47,10 +54,18 @@ qcode/tools/registry.py
 qcode/tools/task_graph_tools.py
 qcode/tools/task_tool.py
 qcode/tools/team_tools.py
+qcode/tools/verification_tools.py
 qcode/utils/__init__.py
 qcode/utils/env_loader.py
 qcode/utils/workspace.py
+tests/test_cli_harness.py
 tests/test_compaction.py
+tests/test_config_profiles.py
 tests/test_context_budgeter.py
+tests/test_goal_middleware.py
+tests/test_model_switching.py
 tests/test_real_provider_smoke.py
+tests/test_responses_provider.py
 tests/test_streaming_tool_executor.py
+tests/test_team_autonomy.py
+tests/test_verification_loops.py

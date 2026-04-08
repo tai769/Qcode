@@ -41,6 +41,9 @@ class ToolRegistry:
     def tool_definitions(self) -> List[ToolDefinition]:
         return list(self._tools.values())
 
+    def get_definition(self, name: str) -> Optional[ToolDefinition]:
+        return self._tools.get(name)
+
     def __len__(self) -> int:
         return len(self._tools)
 
