@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 .qcode/auth.json
 .qcode/config.toml
+.qcode/events.jsonl
