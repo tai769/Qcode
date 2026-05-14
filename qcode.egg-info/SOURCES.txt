@@ -1,9 +1,11 @@
 README.md
 pyproject.toml
 qcode/__init__.py
+qcode/__main__.py
 qcode/app.py
 qcode/config.py
 qcode/config_profiles.py
+qcode/config_toml.py
 qcode/prompts.py
 qcode/team_defaults.py
 qcode/user_profile.py
@@ -18,10 +20,16 @@ qcode/api/__initmain__.py
 qcode/api/server.py
 qcode/harness/__init__.py
 qcode/harness/cli.py
+qcode/harness/cli_legacy.py
+qcode/harness/completer.py
+qcode/harness/setup.py
+qcode/harness/tui.py
 qcode/providers/__init__.py
+qcode/providers/anthropic_provider.py
 qcode/providers/base.py
 qcode/providers/factory.py
 qcode/providers/openai_compatible.py
+qcode/providers/registry.py
 qcode/providers/responses_compatible.py
 qcode/providers/sse.py
 qcode/runtime/__init__.py
@@ -66,6 +74,7 @@ tests/test_goal_middleware.py
 tests/test_model_switching.py
 tests/test_real_provider_smoke.py
 tests/test_responses_provider.py
+tests/test_smoke.py
 tests/test_streaming_tool_executor.py
 tests/test_team_autonomy.py
 tests/test_verification_loops.py
