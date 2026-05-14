@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterator, List, Optional
+import threading
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from qcode.config import AppConfig
 from qcode.providers.base import (
@@ -25,6 +26,23 @@ class AnthropicProvider(StreamingChatProvider):
     def __init__(self, config: AppConfig, system_prompt: str) -> None:
         self.config = config
         self.system_prompt = system_prompt
+        self._cancel_event = threading.Event()
+        self._current_response = None
+
+    def request_cancel(self) -> None:
+        """Request cancellation of the current HTTP request."""
+        self._cancel_event.set()
+        # Close the current response to interrupt the streaming
+        if self._current_response is not None:
+            try:
+                self._current_response.close()
+            except Exception:
+                pass
+
+    def reset_cancel(self) -> None:
+        """Reset cancellation state for a new request."""
+        self._cancel_event.clear()
+        self._current_response = None
 
     def stream_chat_completion(
         self,
@@ -66,7 +84,10 @@ class AnthropicProvider(StreamingChatProvider):
             elif role == "assistant" and tool_calls:
                 # Assistant message with tool use
                 content_blocks = []
-                if content:
+                # Preserve existing content blocks (e.g. thinking) or wrap as text
+                if isinstance(content, list):
+                    content_blocks.extend(content)
+                elif content:
                     content_blocks.append({"type": "text", "text": content})
                 for tc in tool_calls:
                     fn = tc.get("function", {})
@@ -81,6 +102,9 @@ class AnthropicProvider(StreamingChatProvider):
                         "input": args,
                     })
                 anthropic_messages.append({"role": "assistant", "content": content_blocks})
+            elif role == "assistant" and isinstance(content, list):
+                # Assistant message with content blocks (e.g. thinking + text)
+                anthropic_messages.append({"role": "assistant", "content": content})
             else:
                 anthropic_messages.append({"role": role, "content": content})
 
@@ -113,6 +137,9 @@ class AnthropicProvider(StreamingChatProvider):
         else:
             url = f"{base}/v1/messages"
 
+        # Reset cancel state for this request
+        self._cancel_event.clear()
+
         try:
             response = requests.post(
                 url,
@@ -121,8 +148,13 @@ class AnthropicProvider(StreamingChatProvider):
                 timeout=self.config.request_timeout,
                 stream=True,
             )
+            self._current_response = response
         except requests.RequestException as exc:
             raise RuntimeError(f"Anthropic request failed: {exc}") from exc
+
+        if self._cancel_event.is_set():
+            response.close()
+            return
 
         if response.status_code != 200:
             body = decode_response_text(response)[:1000]
@@ -153,6 +185,9 @@ class AnthropicProvider(StreamingChatProvider):
         content_text = ""
 
         for event_data in payloads:
+            # Check cancel flag before processing each event
+            if self._cancel_event.is_set():
+                return
             event_type = event_data.get("type", "")
 
             if event_type == "message_start":

@@ -130,6 +130,7 @@ class ResponseAccumulator:
         self.usage: Optional[UsageInfo] = None
         self.completed = False
         self._text_fragments: List[str] = []
+        self._thinking_fragments: List[str] = []
         self._tool_order: List[str] = []
         self._tool_calls: Dict[str, _ToolCallAccumulator] = {}
 
@@ -149,6 +150,10 @@ class ResponseAccumulator:
 
         if event.event_type in {EventType.OUTPUT_TEXT_DELTA, EventType.OUTPUT_TEXT_DONE} and event.delta:
             self._text_fragments.append(event.delta)
+            return
+
+        if event.event_type == EventType.REASONING_DELTA and event.delta:
+            self._thinking_fragments.append(event.delta)
             return
 
         if event.event_type in {EventType.TOOL_CALL_DELTA, EventType.TOOL_CALL_DONE}:
@@ -173,10 +178,23 @@ class ResponseAccumulator:
             raise ProviderProtocolError("Stream ended without a completed event")
 
         text = "".join(self._text_fragments)
-        message: Message = {
-            "role": "assistant",
-            "content": text,
-        }
+        thinking = "".join(self._thinking_fragments)
+
+        # If there's thinking content, store as content blocks (Anthropic format)
+        if thinking:
+            content_blocks: List[Dict[str, Any]] = []
+            content_blocks.append({"type": "thinking", "thinking": thinking})
+            if text:
+                content_blocks.append({"type": "text", "text": text})
+            message: Message = {
+                "role": "assistant",
+                "content": content_blocks,
+            }
+        else:
+            message: Message = {
+                "role": "assistant",
+                "content": text,
+            }
         if self.response_id:
             message["response_id"] = self.response_id
 

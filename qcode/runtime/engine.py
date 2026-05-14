@@ -8,6 +8,8 @@ from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from qcode.providers.base import ChatProvider, EventType, ResponseAccumulator, ResponseEvent
 from qcode.runtime.context import AgentRunContext
+
+_SENTINEL = object()  # Queue terminator
 from qcode.runtime.middleware import MiddlewarePipeline
 from qcode.runtime.session import ConversationSession
 from qcode.runtime.tool_executor import (
@@ -44,6 +46,7 @@ class AgentEngine:
         tool_output_handler: Optional[ToolOutputHandler] = None,
         response_event_handler: Optional[ResponseEventHandler] = None,
         permission_checker: Optional[PermissionChecker] = None,
+        goal_store: Optional[Any] = None,
     ) -> None:
         self.provider = provider
         self.tool_registry = tool_registry
@@ -51,6 +54,7 @@ class AgentEngine:
         self.middleware = middleware or MiddlewarePipeline()
         self.tool_output_handler = tool_output_handler
         self.response_event_handler = response_event_handler
+        self.goal_store = goal_store
         self.tool_executor = ToolCallExecutor(
             tool_registry,
             event_sink=self.event_sink,
@@ -61,6 +65,21 @@ class AgentEngine:
             self.tool_executor,
             event_sink=self.event_sink,
         )
+        self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        """Request cancellation of the current run."""
+        self._cancel_requested = True
+        # Also cancel the provider's HTTP request if it supports it
+        if hasattr(self.provider, 'request_cancel'):
+            self.provider.request_cancel()
+
+    def reset_cancel(self) -> None:
+        """Reset cancellation flag."""
+        self._cancel_requested = False
+        # Reset the provider's cancel state if it supports it
+        if hasattr(self.provider, 'reset_cancel'):
+            self.provider.reset_cancel()
 
     def set_tool_output_handler(self, handler: ToolOutputHandler) -> None:
         self.tool_output_handler = handler
@@ -185,6 +204,10 @@ class AgentEngine:
         max_iterations: Optional[int] = None,
     ) -> AsyncGenerator[EngineEvent, None]:
         """Async generator that yields EngineEvents for UI consumption."""
+        self._cancel_requested = False
+        # Reset provider cancel state at the start of each run
+        if hasattr(self.provider, 'reset_cancel'):
+            self.provider.reset_cancel()
         run_context = AgentRunContext(session=session)
         iteration_count = 0
 
@@ -194,6 +217,10 @@ class AgentEngine:
         })
 
         while True:
+            if self._cancel_requested:
+                yield EngineEvent("stopped", {"reason": "user_cancel"})
+                return
+
             if max_iterations is not None and iteration_count >= max_iterations:
                 yield EngineEvent("error", {
                     "message": f"Max iterations reached ({max_iterations})",
@@ -212,11 +239,40 @@ class AgentEngine:
             accumulator = ResponseAccumulator()
             self.streaming_tool_executor.begin_turn(session)
 
+            # Run synchronous streaming in a thread to avoid blocking the event loop
+            queue: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            def _producer():
+                try:
+                    for event in self.provider.stream_chat_completion(
+                        session.messages,
+                        self.tool_registry.definitions(),
+                    ):
+                        if self._cancel_requested:
+                            break
+                        loop.call_soon_threadsafe(queue.put_nowait, event)
+                except Exception as exc:
+                    loop.call_soon_threadsafe(queue.put_nowait, exc)
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+            producer_task = asyncio.create_task(asyncio.to_thread(_producer))
+
             try:
-                for event in self.provider.stream_chat_completion(
-                    session.messages,
-                    self.tool_registry.definitions(),
-                ):
+                while True:
+                    item = await queue.get()
+                    if item is _SENTINEL:
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+                    event: ResponseEvent = item
+
+                    if self._cancel_requested:
+                        self.streaming_tool_executor.discard(wait_running=True)
+                        yield EngineEvent("stopped", {"reason": "user_cancel"})
+                        return
+
                     self._handle_response_event(session, event)
                     self.streaming_tool_executor.observe_event(event)
                     accumulator.consume(event)
@@ -237,6 +293,8 @@ class AgentEngine:
                 self.streaming_tool_executor.discard(wait_running=True)
                 yield EngineEvent("error", {"message": str(exc)})
                 return
+            finally:
+                producer_task.cancel()
 
             result = accumulator.to_chat_result()
             if result.response_id:
@@ -251,10 +309,31 @@ class AgentEngine:
                 "response_id": result.response_id,
             })
 
-            if "tool_calls" not in result.message or result.finish_reason != "tool_calls":
-                yield EngineEvent("assistant_message", {
-                    "content": result.message.get("content", ""),
+            # Emit usage information if available
+            if result.raw_response and "usage" in result.raw_response:
+                usage = result.raw_response["usage"]
+                yield EngineEvent("usage", {
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
                 })
+
+            if "tool_calls" not in result.message or result.finish_reason != "tool_calls":
+                content = result.message.get("content", "")
+                # Extract text from content blocks if needed (e.g. thinking + text)
+                if isinstance(content, list):
+                    text_parts = [
+                        block.get("text", "")
+                        for block in content
+                        if isinstance(block, dict) and block.get("type") == "text"
+                    ]
+                    content = "".join(text_parts)
+                yield EngineEvent("assistant_message", {
+                    "content": content,
+                })
+                return
+
+            if self._cancel_requested:
+                yield EngineEvent("stopped", {"reason": "user_cancel"})
                 return
 
             tool_calls = result.message["tool_calls"]

@@ -400,8 +400,8 @@ def build_teammate_manager(
     return team_manager
 
 
-def build_goal_store(config: AppConfig) -> GoalStore:
-    return GoalStore(config.workdir / ".qcode" / "active_goal.md")
+def build_goal_store(config: AppConfig, *, persist: bool = False) -> GoalStore:
+    return GoalStore(config.workdir / ".qcode" / "active_goal.md", persist=persist)
 
 
 def build_verification_loop_manager(
@@ -418,19 +418,27 @@ def build_verification_loop_manager(
     )
 
 
-def build_engine_for_tui(config: AppConfig) -> AgentEngine:
-    """Build a lightweight engine for TUI mode (no team, no background)."""
+def build_engine_for_tui(config: AppConfig, *, resume: bool = False) -> AgentEngine:
+    """Build a lightweight engine for TUI mode (no team, no background).
+
+    When *resume* is False (the default), the goal store is in-memory only
+    so each conversation starts completely fresh — matching Claude Code's
+    per-conversation model.
+    """
     import hashlib
     from qcode.runtime.compaction import ConversationCompactor
     from qcode.runtime.compaction_middleware import CompactionMiddleware
     from qcode.runtime.context_budgeter import ContextBudgeter, estimate_text_tokens
     from qcode.tools.builtin_tools import build_builtin_tool_registry
 
-    # Load project memory (CLAUDE.md equivalent)
+    # Load project memory (CLAUDE.md equivalent) — always OK, it's project context
     memory_content = _load_project_memory(config.workdir)
+    custom_instructions = _load_custom_instructions(config.workdir)
     system_prompt = build_system_prompt(config.workdir)
     if memory_content:
         system_prompt += f"\n\n## Project Memory\n{memory_content}"
+    if custom_instructions:
+        system_prompt += f"\n\n{custom_instructions}"
     provider = build_chat_provider(config, system_prompt)
     tool_registry = build_builtin_tool_registry(
         config.workdir,
@@ -452,7 +460,7 @@ def build_engine_for_tui(config: AppConfig) -> AgentEngine:
         summary_ratio=config.compaction_summary_ratio,
         reserved_prompt_tokens=estimate_text_tokens(system_prompt),
     )
-    goal_store = build_goal_store(config)
+    goal_store = build_goal_store(config, persist=resume)
 
     middleware = MiddlewarePipeline([
         GoalMiddleware(goal_store),
@@ -464,6 +472,7 @@ def build_engine_for_tui(config: AppConfig) -> AgentEngine:
         provider,
         tool_registry,
         middleware=middleware,
+        goal_store=goal_store,
     )
 
 
@@ -480,3 +489,31 @@ def _load_project_memory(workdir: Path) -> str:
         except Exception:
             pass
     return ""
+
+
+def _load_custom_instructions(workdir: Path) -> str:
+    """Load custom instructions from ~/.qcode/instructions.md and .qcode/instructions.md."""
+    from pathlib import Path as P
+    instructions = []
+
+    # Global instructions
+    global_path = P.home() / ".qcode" / "instructions.md"
+    if global_path.exists():
+        try:
+            content = global_path.read_text(encoding="utf-8").strip()
+            if content:
+                instructions.append(f"## Global Instructions\n{content}")
+        except Exception:
+            pass
+
+    # Project-level instructions
+    project_path = workdir / ".qcode" / "instructions.md"
+    if project_path.exists():
+        try:
+            content = project_path.read_text(encoding="utf-8").strip()
+            if content:
+                instructions.append(f"## Project Instructions\n{content}")
+        except Exception:
+            pass
+
+    return "\n\n".join(instructions)

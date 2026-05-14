@@ -141,7 +141,7 @@ def _run_tui(config: AppConfig, registry, *, resume: bool = False) -> None:
     from qcode.harness.tui import run_tui
     from qcode.runtime.session import ConversationSession
 
-    engine = build_engine_for_tui(config)
+    engine = build_engine_for_tui(config, resume=resume)
 
     session = None
     if resume:

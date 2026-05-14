@@ -20,6 +20,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
+    Collapsible,
     DataTable,
     Footer,
     Header,
@@ -238,9 +239,16 @@ class StatusBar(Static):
         self._model = ""
         self._status = "idle"
         self._provider = ""
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._turn_count = 0
 
     def render(self) -> str:
-        return f" [bold cyan]Qcode[/] │ {self._provider}/{self._model} │ {self._status}"
+        token_str = ""
+        if self._input_tokens > 0 or self._output_tokens > 0:
+            token_str = f" │ {self._input_tokens:,}→{self._output_tokens:,} tok"
+        turn_str = f" │ turn {self._turn_count}" if self._turn_count > 0 else ""
+        return f" [bold cyan]Qcode[/] │ {self._provider}/{self._model} │ {self._status}{token_str}{turn_str}"
 
     def update_info(self, provider: str, model: str) -> None:
         self._provider = provider
@@ -249,6 +257,79 @@ class StatusBar(Static):
 
     def update_status(self, status: str) -> None:
         self._status = status
+        self.refresh()
+
+    def update_tokens(self, input_tokens: int, output_tokens: int) -> None:
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
+        self.refresh()
+
+    def increment_turn(self) -> None:
+        self._turn_count += 1
+        self.refresh()
+
+
+class ThinkingPanel(Static):
+    """Shows the AI's thinking/reasoning process."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._thinking_text = ""
+        self._is_thinking = False
+        self._collapsed = True
+
+    def render(self) -> str:
+        if not self._is_thinking and not self._thinking_text:
+            return "[dim]  No thinking[/]"
+
+        lines = []
+        if self._is_thinking:
+            lines.append("[bold yellow]  Thinking...[/]")
+        else:
+            lines.append("[bold]  Thinking[/]")
+
+        if self._collapsed and self._thinking_text:
+            # Show only last 3 lines when collapsed
+            thinking_lines = self._thinking_text.strip().split("\n")
+            if len(thinking_lines) > 3:
+                lines.append("[dim]  ...[/]")
+                for line in thinking_lines[-3:]:
+                    lines.append(f"  [dim]{line[:50]}[/]")
+            else:
+                for line in thinking_lines:
+                    lines.append(f"  [dim]{line[:50]}[/]")
+        elif self._thinking_text:
+            for line in self._thinking_text.strip().split("\n"):
+                lines.append(f"  [dim]{line[:50]}[/]")
+
+        lines.append("")
+        if self._is_thinking:
+            lines.append("[dim]  Esc to stop[/]")
+        else:
+            lines.append("[dim]  Click to expand[/]")
+
+        return "\n".join(lines)
+
+    def on_click(self) -> None:
+        self._collapsed = not self._collapsed
+        self.refresh()
+
+    def start_thinking(self) -> None:
+        self._is_thinking = True
+        self._thinking_text = ""
+        self.refresh()
+
+    def add_thinking(self, text: str) -> None:
+        self._thinking_text += text
+        self.refresh()
+
+    def stop_thinking(self) -> None:
+        self._is_thinking = False
+        self.refresh()
+
+    def clear(self) -> None:
+        self._thinking_text = ""
+        self._is_thinking = False
         self.refresh()
 
 
@@ -311,6 +392,8 @@ class ChatPanel(RichLog):
     def __init__(self, **kwargs) -> None:
         super().__init__(markup=True, wrap=True, highlight=True, **kwargs)
         self._streaming_line = ""
+        self._streaming_widget: Optional[Static] = None
+        self._stream_dirty = False
 
     def add_user_message(self, text: str) -> None:
         self._flush_streaming()
@@ -318,11 +401,42 @@ class ChatPanel(RichLog):
 
     def add_assistant_text(self, text: str) -> None:
         self._flush_streaming()
-        self.write(Markdown(text))
+        # Process code blocks with syntax highlighting
+        self._write_with_code_highlighting(text)
+
+    def _write_with_code_highlighting(self, text: str) -> None:
+        """Write text with syntax highlighting for code blocks."""
+        import re
+
+        # Split by code blocks
+        parts = re.split(r'(```[\s\S]*?```)', text)
+
+        for part in parts:
+            if part.startswith('```') and part.endswith('```'):
+                # Extract language and code
+                lines = part[3:-3].split('\n', 1)
+                lang = lines[0].strip() if lines else ''
+                code = lines[1] if len(lines) > 1 else ''
+
+                if lang and code:
+                    try:
+                        from rich.syntax import Syntax
+                        syntax = Syntax(code, lang, theme="monokai", line_numbers=True)
+                        self.write(syntax)
+                    except Exception:
+                        # Fallback to plain text
+                        self.write(f"[dim]```{lang}[/]\n{code}\n[dim]```[/]")
+                elif code:
+                    self.write(f"[dim]```[/]\n{code}\n[dim]```[/]")
+            else:
+                # Regular markdown
+                if part.strip():
+                    self.write(Markdown(part))
 
     def add_streaming_delta(self, text: str) -> None:
-        """Accumulate streaming text."""
+        """Accumulate streaming text and schedule UI refresh."""
         self._streaming_line += text
+        self._stream_dirty = True
 
     def flush_streaming(self) -> None:
         """Flush accumulated streaming text as markdown."""
@@ -332,6 +446,16 @@ class ChatPanel(RichLog):
         if self._streaming_line:
             self.write(Markdown(self._streaming_line))
             self._streaming_line = ""
+            self._stream_dirty = False
+
+    def render_streaming_now(self) -> None:
+        """Force a UI refresh of the current streaming content."""
+        if self._stream_dirty and self._streaming_line:
+            # Use a temporary Static widget approach: just write what we have
+            # RichLog doesn't support in-place editing, so we flush periodically
+            self.write(Markdown(self._streaming_line))
+            self._streaming_line = ""
+            self._stream_dirty = False
 
     def add_tool_call(self, tool_name: str, args_preview: str = "") -> None:
         self._flush_streaming()
@@ -346,9 +470,47 @@ class ChatPanel(RichLog):
 
     def add_tool_result(self, tool_name: str, output: str, is_error: bool = False) -> None:
         self._flush_streaming()
-        color = "red" if is_error else "dim"
-        preview = output[:200].replace("\n", " ")
-        self.write(f"[{color}]  → {preview}[/]")
+        if is_error:
+            self.write(f"[bold red]  ✗ {tool_name} Error:[/]\n{output[:500]}")
+        else:
+            # Show tool result with syntax highlighting if it looks like code
+            if tool_name in ("read_file", "grep", "bash") and len(output) > 100:
+                # Try to detect language for syntax highlighting
+                lang = self._detect_language(tool_name, output)
+                if lang:
+                    try:
+                        from rich.syntax import Syntax
+                        syntax = Syntax(output[:1000], lang, theme="monokai", line_numbers=False)
+                        self.write(f"[dim]  → {tool_name} result:[/]")
+                        self.write(syntax)
+                        if len(output) > 1000:
+                            self.write(f"[dim]  ... ({len(output)} chars total)[/]")
+                        return
+                    except Exception:
+                        pass
+            # Fallback to plain text
+            preview = output[:300].replace("\n", " ")
+            self.write(f"[dim]  → {preview}[/]")
+
+    def _detect_language(self, tool_name: str, output: str) -> str:
+        """Detect programming language for syntax highlighting."""
+        if tool_name == "grep":
+            # Try to detect from file extensions in grep output
+            import re
+            match = re.search(r'\.(\w+):', output[:100])
+            if match:
+                ext = match.group(1).lower()
+                lang_map = {
+                    "py": "python", "js": "javascript", "ts": "typescript",
+                    "jsx": "javascript", "tsx": "typescript", "rs": "rust",
+                    "go": "go", "rb": "ruby", "java": "java", "c": "c",
+                    "cpp": "cpp", "h": "c", "hpp": "cpp", "sh": "bash",
+                    "bash": "bash", "zsh": "zsh", "json": "json", "yaml": "yaml",
+                    "yml": "yaml", "toml": "toml", "md": "markdown", "html": "html",
+                    "css": "css", "sql": "sql", "xml": "xml",
+                }
+                return lang_map.get(ext, "")
+        return ""
 
     def add_system(self, text: str) -> None:
         self._flush_streaming()
@@ -373,12 +535,27 @@ class QcodeApp(App):
         width: 1fr; height: 1fr; border: solid $primary; margin: 0 0 0 1;
     }
     #sidebar {
-        width: 28; height: 1fr; border: solid $primary; margin: 0 1 0 0;
+        width: 32; height: 1fr; border: solid $primary; margin: 0 1 0 0;
+        overflow-y: auto;
+    }
+    #sidebar Collapsible {
+        margin: 0;
+        border: none;
+    }
+    #sidebar Collapsible > Title {
+        background: $primary-background-darken-1;
+        padding: 0 1;
+    }
+    #thinking-panel {
+        height: auto; max-height: 10;
+        overflow-y: auto; background: $surface-darken-1;
     }
     #todo-panel {
-        height: 1fr; border-bottom: solid $primary; overflow-y: auto;
+        height: auto; max-height: 15;
+        overflow-y: auto;
     }
-    #team-panel { height: 1fr; overflow-y: auto; }
+    #team-panel { height: auto; max-height: 10; overflow-y: auto; }
+    #git-panel { height: auto; padding: 0 1; }
     #input-area { height: auto; max-height: 10; margin: 0 1 1 1; }
     #prompt-input { border: solid $primary; }
     #hint-bar {
@@ -388,7 +565,8 @@ class QcodeApp(App):
     """
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Quit"),
+        Binding("ctrl+c", "interrupt_or_quit", "Quit"),
+        Binding("ctrl+n", "new_session", "New"),
         Binding("ctrl+l", "clear_chat", "Clear"),
         Binding("ctrl+t", "toggle_sidebar", "Sidebar"),
         Binding("ctrl+m", "pick_model", "Model"),
@@ -417,22 +595,32 @@ class QcodeApp(App):
         self._sidebar_visible = True
         self._completions: List[str] = []
         self._completion_index = 0
+        self._stream_refresh_task: Optional[asyncio.Task] = None
+        self._reasoning_shown = False
         self._load_global_permissions()
 
     def compose(self) -> ComposeResult:
         yield StatusBar(id="status-bar")
         with Horizontal(id="main-area"):
             with Vertical(id="sidebar"):
-                yield TodoPanel(id="todo-panel")
-                yield TeamPanel(id="team-panel")
+                with Collapsible(title="Thinking", collapsed=False, id="thinking-collapse"):
+                    yield ThinkingPanel(id="thinking-panel")
+                with Collapsible(title="Todo", collapsed=False, id="todo-collapse"):
+                    yield TodoPanel(id="todo-panel")
+                with Collapsible(title="Team", collapsed=True, id="team-collapse"):
+                    yield TeamPanel(id="team-panel")
+                with Collapsible(title="Git", collapsed=True, id="git-collapse"):
+                    yield Static("[dim]  Click to refresh[/]", id="git-panel")
             yield ChatPanel(id="chat-panel")
         with Vertical(id="input-area"):
             yield Input(
                 placeholder="Type a message... (Tab=@files, Ctrl+M=model, Ctrl+T=sidebar)",
                 id="prompt-input",
+                suggester=None,
+                tooltip="",
             )
         yield Static(
-            " [dim]Esc=stop  /=cmd  Tab=@file  Ctrl+M=model  Ctrl+T=sidebar  Ctrl+C=quit[/]",
+            " [dim]Esc/Ctrl+C=stop  Ctrl+N=new  /=cmd  Tab=@file  Ctrl+M=model  Ctrl+T=sidebar[/]",
             id="hint-bar",
         )
 
@@ -441,7 +629,38 @@ class QcodeApp(App):
         self._update_status_bar()
         self._refresh_todo_panel()
         self._refresh_team_panel()
+        self._refresh_git_panel()
         self._load_memory()
+
+    def _refresh_git_panel(self) -> None:
+        """Refresh git status in the sidebar."""
+        import subprocess
+        try:
+            panel = self.query_one("#git-panel", Static)
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True, text=True, cwd=self.config.workdir
+            ).stdout.strip()
+
+            status = subprocess.run(
+                ["git", "status", "--short"],
+                capture_output=True, text=True, cwd=self.config.workdir
+            ).stdout.strip()
+
+            if not branch:
+                panel.update("[dim]  Not a git repo[/]")
+                return
+
+            lines = [f"[bold]  {branch}[/]"]
+            if status:
+                changed = len(status.split("\n"))
+                lines.append(f"[yellow]  {changed} changed[/]")
+            else:
+                lines.append("[green]  clean[/]")
+
+            panel.update("\n".join(lines))
+        except Exception:
+            pass
 
     # ─── Status bar ──────────────────────────────────────────────
 
@@ -480,6 +699,16 @@ class QcodeApp(App):
             self._completions = []
 
     def on_key(self, event) -> None:
+        # Handle Escape explicitly — stop running agent or blur input
+        if event.key == "escape":
+            if self._is_running:
+                self.engine.request_cancel()
+            else:
+                # Blur the input so focus returns to the app
+                self.query_one("#prompt-input", Input).blur()
+            event.prevent_default()
+            return
+
         if event.key == "tab" and self._completions:
             event.prevent_default()
             input_widget = self.query_one("#prompt-input", Input)
@@ -513,67 +742,225 @@ class QcodeApp(App):
             return
         self._is_running = True
         self._streaming_text = ""
+        self._reasoning_shown = False
         status = self.query_one("#status-bar", StatusBar)
         status.update_status("thinking")
         chat = self.query_one("#chat-panel", ChatPanel)
+        thinking = self.query_one("#thinking-panel", ThinkingPanel)
+        thinking.clear()
         chat.add_user_message(user_text)
         self.session.add_user_text(user_text)
+
+        # Start a periodic refresh timer for streaming display
+        self._stream_refresh_task = asyncio.create_task(self._stream_refresh_loop())
+
         try:
             async for event in self.engine.run_events(self.session):
                 self._handle_engine_event(event)
                 if event.type == "tool_result":
                     self._refresh_todo_panel()
+                if event.type == "stopped":
+                    chat.add_system(f"[yellow]Stopped: {event.data.get('reason', 'cancelled')}[/]")
         except Exception as exc:
             chat.add_error(str(exc))
         finally:
+            if self._stream_refresh_task:
+                self._stream_refresh_task.cancel()
+                self._stream_refresh_task = None
             chat.flush_streaming()
             self._is_running = False
             self._streaming_text = ""
             status.update_status("idle")
             self._auto_save_session()
 
+    async def _stream_refresh_loop(self) -> None:
+        """Periodically flush streaming content to the UI."""
+        while True:
+            await asyncio.sleep(0.15)  # ~6-7 fps refresh rate
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.render_streaming_now()
+
     def _auto_save_session(self) -> None:
         sessions_dir = self.config.workdir / ".qcode" / "sessions"
         self.session.save(sessions_dir)
 
+    def _get_tool_status_text(self, tool_name: str, args: str) -> str:
+        """Generate human-readable status text for tool calls."""
+        import json
+
+        # Try to parse arguments for better display
+        try:
+            if isinstance(args, str) and args.startswith('{'):
+                args_dict = json.loads(args)
+            else:
+                args_dict = {}
+        except (json.JSONDecodeError, TypeError):
+            args_dict = {}
+
+        if tool_name == "read_file":
+            path = args_dict.get("path", "")
+            if path:
+                # Show just filename, not full path
+                filename = Path(path).name
+                return f"reading {filename}"
+            return "reading file"
+
+        elif tool_name == "write_file":
+            path = args_dict.get("path", "")
+            if path:
+                filename = Path(path).name
+                return f"writing {filename}"
+            return "writing file"
+
+        elif tool_name == "edit_file":
+            path = args_dict.get("path", "")
+            if path:
+                filename = Path(path).name
+                return f"editing {filename}"
+            return "editing file"
+
+        elif tool_name == "bash":
+            command = args_dict.get("command", "")
+            if command:
+                # Show first 30 chars of command
+                cmd_preview = command[:30] + ("..." if len(command) > 30 else "")
+                return f"running: {cmd_preview}"
+            return "running command"
+
+        elif tool_name == "grep":
+            pattern = args_dict.get("pattern", "")
+            if pattern:
+                return f"searching: {pattern[:20]}"
+            return "searching"
+
+        elif tool_name == "glob":
+            pattern = args_dict.get("pattern", "")
+            if pattern:
+                return f"finding: {pattern[:20]}"
+            return "finding files"
+
+        elif tool_name == "todo":
+            return "managing todos"
+
+        elif tool_name == "compact":
+            return "compacting context"
+
+        elif tool_name == "task":
+            return "managing tasks"
+
+        elif tool_name == "grep":
+            pattern = args_dict.get("pattern", "")
+            if pattern:
+                return f"searching: {pattern[:20]}"
+            return "searching"
+
+        elif tool_name == "glob":
+            pattern = args_dict.get("pattern", "")
+            if pattern:
+                return f"finding: {pattern[:20]}"
+            return "finding files"
+
+        elif tool_name == "list_directory":
+            path = args_dict.get("path", ".")
+            return f"listing {path}"
+
+        elif tool_name == "git_status":
+            return "checking git status"
+
+        elif tool_name == "git_diff":
+            return "showing git diff"
+
+        elif tool_name == "git_log":
+            return "showing git log"
+
+        elif tool_name == "git_commit":
+            message = args_dict.get("message", "")
+            if message:
+                return f"committing: {message[:20]}"
+            return "committing"
+
+        elif tool_name == "git_branch":
+            return "listing branches"
+
+        else:
+            return f"tool: {tool_name}"
+
     def _handle_engine_event(self, event: EngineEvent) -> None:
         chat = self.query_one("#chat-panel", ChatPanel)
         status = self.query_one("#status-bar", StatusBar)
+        thinking = self.query_one("#thinking-panel", ThinkingPanel)
 
         if event.type == "text_delta":
             text = event.data.get("text", "")
             self._streaming_text += text
             chat.add_streaming_delta(text)
-            status.update_status("streaming")
+            status.update_status("responding")
+            # Stop thinking indicator when response starts
+            if self._reasoning_shown:
+                thinking.stop_thinking()
+                self._reasoning_shown = False
 
         elif event.type == "assistant_message":
             content = event.data.get("content", "")
+            # Safety: extract text if content is a list of blocks
+            if isinstance(content, list):
+                text_parts = [
+                    block.get("text", "")
+                    for block in content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                ]
+                content = "".join(text_parts)
             if content:
                 chat.add_assistant_text(content)
             elif self._streaming_text:
                 chat.flush_streaming()
             self._streaming_text = ""
+            thinking.stop_thinking()
+            status.increment_turn()
 
         elif event.type == "reasoning_delta":
-            pass  # Could show in a separate panel
+            # Show thinking in the ThinkingPanel
+            text = event.data.get("text", "")
+            if not self._reasoning_shown:
+                self._reasoning_shown = True
+                thinking.start_thinking()
+                status.update_status("thinking")
+            thinking.add_thinking(text)
 
         elif event.type == "tool_call":
             tool_name = event.data.get("tool_name", "")
             args = event.data.get("arguments", "")
-            chat.add_tool_call(tool_name, str(args)[:80])
-            status.update_status(f"tool: {tool_name}")
+            # Parse arguments for better status display
+            args_str = str(args)
+            status_text = self._get_tool_status_text(tool_name, args_str)
+            status.update_status(status_text)
+            chat.add_tool_call(tool_name, args_str[:80])
 
         elif event.type == "tool_result":
             tool_name = event.data.get("tool_name", "")
             content = event.data.get("content", "")
+            if isinstance(content, list):
+                content = str(content)
             is_error = content.startswith("Error:") if content else False
             chat.add_tool_result(tool_name, content, is_error)
 
-        elif event.type == "error":
-            chat.add_error(event.data.get("message", "Unknown error"))
-
         elif event.type == "model_request":
             status.update_status("thinking")
+            thinking.start_thinking()
+            self._reasoning_shown = True
+
+        elif event.type == "usage":
+            input_tokens = event.data.get("input_tokens", 0)
+            output_tokens = event.data.get("output_tokens", 0)
+            status.update_tokens(input_tokens, output_tokens)
+
+        elif event.type == "error":
+            chat.add_error(event.data.get("message", "Unknown error"))
+            thinking.stop_thinking()
+
+        elif event.type == "stopped":
+            # Handled in _run_agent
+            thinking.stop_thinking()
 
     # ─── Slash commands ──────────────────────────────────────────
 
@@ -585,8 +972,30 @@ class QcodeApp(App):
 
         if cmd == "/help":
             chat.add_system(
-                "Commands: /help /clear /compact /model /team /task /todo "
-                "/save /load /config /cost /memory /setup"
+                "**Commands:**\n"
+                "  /help          Show this help\n"
+                "  /clear         Clear session\n"
+                "  /compact       Compress context\n"
+                "  /model [id]    Switch model\n"
+                "  /todo          Show todo list\n"
+                "  /team          Show team status\n"
+                "  /task          Show tasks\n"
+                "  /save          Save session\n"
+                "  /load [id]     Load session\n"
+                "  /config        Show config\n"
+                "  /memory        Edit memory\n"
+                "  /setup         Run setup\n"
+                "  /goal [text]   Set/clear goal\n"
+                "  /git           Show git status\n"
+                "  /diff [file]   Show git diff\n"
+                "  /tree [path]   Show file tree\n"
+                "  /instructions  Show custom instructions\n"
+                "\n**Shortcuts:**\n"
+                "  Esc/Ctrl+C     Stop/Quit\n"
+                "  Ctrl+N         New session\n"
+                "  Ctrl+M         Switch model\n"
+                "  Ctrl+T         Toggle sidebar\n"
+                "  Ctrl+L         Clear screen"
             )
         elif cmd == "/clear":
             self.session = ConversationSession()
@@ -619,6 +1028,16 @@ class QcodeApp(App):
             self._edit_memory()
         elif cmd == "/setup":
             self._run_setup()
+        elif cmd == "/goal":
+            self._handle_goal_command(arg)
+        elif cmd == "/instructions":
+            self._show_instructions()
+        elif cmd == "/git":
+            self._show_git_status()
+        elif cmd == "/diff":
+            self._show_git_diff(arg)
+        elif cmd == "/tree":
+            self._show_file_tree(arg)
         else:
             chat.add_system(f"Unknown: {cmd}. Type /help")
 
@@ -695,6 +1114,160 @@ class QcodeApp(App):
 
     def _run_setup(self) -> None:
         self.push_screen(SetupScreen(), callback=self._on_setup_complete)
+
+    def _handle_goal_command(self, arg: str) -> None:
+        chat = self.query_one("#chat-panel", ChatPanel)
+        goal_store = self.engine.goal_store
+
+        if not goal_store:
+            chat.add_system("[yellow]No goal store available.[/]")
+            return
+
+        if not arg:
+            current = goal_store.get()
+            if current:
+                chat.add_system(f"**Current goal:** {current}")
+                chat.add_system("Use `/goal clear` to remove, or `/goal <text>` to set a new one.")
+            else:
+                chat.add_system("No active goal. Use `/goal <text>` to set one.")
+        elif arg.strip().lower() == "clear":
+            goal_store.clear()
+            chat.add_system("[green]Goal cleared.[/]")
+        else:
+            goal_store.set(arg)
+            chat.add_system(f"[green]Goal set:[/] {arg}")
+
+    def _show_instructions(self) -> None:
+        """Show custom instructions."""
+        chat = self.query_one("#chat-panel", ChatPanel)
+        from pathlib import Path
+
+        global_path = Path.home() / ".qcode" / "instructions.md"
+        project_path = self.config.workdir / ".qcode" / "instructions.md"
+
+        lines = ["**Custom Instructions**"]
+        lines.append("")
+
+        if global_path.exists():
+            content = global_path.read_text(encoding="utf-8").strip()
+            lines.append(f"**Global** (`{global_path}`):")
+            lines.append(content if content else "(empty)")
+        else:
+            lines.append(f"**Global**: Not created yet")
+            lines.append(f"  Create `{global_path}` to add global instructions")
+
+        lines.append("")
+
+        if project_path.exists():
+            content = project_path.read_text(encoding="utf-8").strip()
+            lines.append(f"**Project** (`{project_path}`):")
+            lines.append(content if content else "(empty)")
+        else:
+            lines.append(f"**Project**: Not created yet")
+            lines.append(f"  Create `{project_path}` to add project-specific instructions")
+
+        chat.add_assistant_text("\n".join(lines))
+
+    def _show_git_status(self) -> None:
+        """Show git status."""
+        chat = self.query_one("#chat-panel", ChatPanel)
+        import subprocess
+
+        try:
+            # Get current branch
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True, text=True, cwd=self.config.workdir
+            ).stdout.strip()
+
+            # Get status
+            status = subprocess.run(
+                ["git", "status", "--short"],
+                capture_output=True, text=True, cwd=self.config.workdir
+            ).stdout.strip()
+
+            # Get recent commits
+            log = subprocess.run(
+                ["git", "log", "--oneline", "-5"],
+                capture_output=True, text=True, cwd=self.config.workdir
+            ).stdout.strip()
+
+            lines = [f"**Git Status** (branch: `{branch}`)"]
+            lines.append("")
+
+            if status:
+                lines.append("**Changes:**")
+                for line in status.split("\n")[:20]:
+                    lines.append(f"  {line}")
+                if status.count("\n") > 20:
+                    lines.append(f"  ... and {status.count(chr(10)) - 20} more")
+            else:
+                lines.append("Working tree clean")
+
+            lines.append("")
+            if log:
+                lines.append("**Recent commits:**")
+                for line in log.split("\n"):
+                    lines.append(f"  {line}")
+
+            chat.add_assistant_text("\n".join(lines))
+        except Exception as e:
+            chat.add_error(f"Git error: {e}")
+
+    def _show_git_diff(self, path: str = "") -> None:
+        """Show git diff with syntax highlighting."""
+        chat = self.query_one("#chat-panel", ChatPanel)
+        import subprocess
+
+        try:
+            cmd = ["git", "diff"]
+            if path:
+                cmd.extend(["--", path])
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, cwd=self.config.workdir
+            )
+
+            if not result.stdout.strip():
+                chat.add_system("No changes to show.")
+                return
+
+            # Show diff with syntax highlighting
+            from rich.syntax import Syntax
+            diff_syntax = Syntax(result.stdout, "diff", theme="monokai", line_numbers=False)
+            chat.write(diff_syntax)
+        except Exception as e:
+            chat.add_error(f"Git diff error: {e}")
+
+    def _show_file_tree(self, path: str = ".") -> None:
+        """Show file tree structure."""
+        chat = self.query_one("#chat-panel", ChatPanel)
+        import subprocess
+
+        try:
+            # Use tree command if available, otherwise use find
+            result = subprocess.run(
+                ["tree", "-L", "3", "--dirsfirst", "-I", "__pycache__|.git|.venv|node_modules", path],
+                capture_output=True, text=True, cwd=self.config.workdir
+            )
+
+            if result.returncode != 0:
+                # Fallback to find
+                result = subprocess.run(
+                    ["find", path, "-maxdepth", "3", "-type", "f", "-not", "*/__pycache__/*", "-not", "*/.git/*"],
+                    capture_output=True, text=True, cwd=self.config.workdir
+                )
+
+            if not result.stdout.strip():
+                chat.add_system("No files found.")
+                return
+
+            lines = [f"**File Tree** (`{path}`)"]
+            lines.append("")
+            lines.append(result.stdout)
+            chat.add_assistant_text("\n".join(lines))
+        except Exception as e:
+            chat.add_error(f"Tree error: {e}")
 
     def _on_setup_complete(self, result: bool) -> None:
         if result:
@@ -822,7 +1395,31 @@ class QcodeApp(App):
 
     def action_stop(self) -> None:
         if self._is_running:
-            self.session.request_run_stop("user interrupt")
+            self.engine.request_cancel()
+            # Show immediate feedback
+            status = self.query_one("#status-bar", StatusBar)
+            status.update_status("stopping...")
+
+    def action_interrupt_or_quit(self) -> None:
+        """Ctrl+C: interrupt if running, quit otherwise."""
+        if self._is_running:
+            self.engine.request_cancel()
+            status = self.query_one("#status-bar", StatusBar)
+            status.update_status("interrupting...")
+        else:
+            self.exit()
+
+    def action_new_session(self) -> None:
+        """Start a new session (Ctrl+N)."""
+        if self._is_running:
+            self.engine.request_cancel()
+        self.session = ConversationSession()
+        if self.engine.goal_store:
+            self.engine.goal_store.clear()
+        self.query_one("#chat-panel", ChatPanel).clear()
+        self._refresh_todo_panel()
+        chat = self.query_one("#chat-panel", ChatPanel)
+        chat.add_system("[green]New session started.[/]")
 
 
 QCODE_HOME = Path.home() / ".qcode"

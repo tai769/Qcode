@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any, Dict, Iterator, List, Optional
 
 from qcode.config import AppConfig
@@ -25,6 +26,22 @@ class OpenAICompatibleProvider(StreamingChatProvider):
     def __init__(self, config: AppConfig, system_prompt: str) -> None:
         self.config = config
         self.system_prompt = system_prompt
+        self._cancel_event = threading.Event()
+        self._current_response = None
+
+    def request_cancel(self) -> None:
+        """Request cancellation of the current HTTP request."""
+        self._cancel_event.set()
+        if self._current_response is not None:
+            try:
+                self._current_response.close()
+            except Exception:
+                pass
+
+    def reset_cancel(self) -> None:
+        """Reset cancellation state for a new request."""
+        self._cancel_event.clear()
+        self._current_response = None
 
     def stream_chat_completion(
         self,
@@ -56,6 +73,9 @@ class OpenAICompatibleProvider(StreamingChatProvider):
         if tools:
             payload["tools"] = tools
 
+        # Reset cancel state for this request
+        self._cancel_event.clear()
+
         try:
             response = requests.post(
                 f"{self.config.api_base_url.rstrip('/')}/chat/completions",
@@ -64,8 +84,13 @@ class OpenAICompatibleProvider(StreamingChatProvider):
                 timeout=self.config.request_timeout,
                 stream=True,
             )
+            self._current_response = response
         except requests.RequestException as exc:
             raise RuntimeError(f"LLM request failed: {exc}") from exc
+
+        if self._cancel_event.is_set():
+            response.close()
+            return
 
         if response.status_code != 200:
             body = decode_response_text(response)[:1000]
@@ -104,6 +129,9 @@ class OpenAICompatibleProvider(StreamingChatProvider):
         completion_emitted = False
 
         for payload in payloads:
+            # Check cancel flag before processing each event
+            if self._cancel_event.is_set():
+                return
             if not isinstance(payload, dict):
                 continue
 

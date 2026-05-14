@@ -24,6 +24,42 @@ def build_builtin_tool_registry(
     ) -> str:
         return workspace.run_bash(command)
 
+    def grep(
+        pattern: str,
+        path: str = ".",
+        include: str = "",
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        """Search for a pattern in files."""
+        cmd = f"grep -rn '{pattern}' {path}"
+        if include:
+            cmd += f" --include='{include}'"
+        cmd += " 2>/dev/null | head -100"
+        result = workspace.run_bash(cmd)
+        if not result.strip():
+            return f"No matches found for '{pattern}'"
+        return result
+
+    def glob(
+        pattern: str,
+        path: str = ".",
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        """Find files matching a glob pattern."""
+        cmd = f"find {path} -name '{pattern}' -type f 2>/dev/null | head -100"
+        result = workspace.run_bash(cmd)
+        if not result.strip():
+            return f"No files found matching '{pattern}'"
+        return result
+
+    def list_directory(
+        path: str = ".",
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        """List directory contents."""
+        cmd = f"ls -la {path} 2>/dev/null"
+        return workspace.run_bash(cmd)
+
     def read_file(
         path: str,
         limit: Optional[int] = None,
@@ -362,6 +398,62 @@ def build_builtin_tool_registry(
                 handler=bash,
             ),
             ToolDefinition(
+                name="grep",
+                description="Search for a pattern in files using grep.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Search pattern (regex supported)",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Directory or file path to search in (default: current dir)",
+                        },
+                        "include": {
+                            "type": "string",
+                            "description": "File pattern to include (e.g., '*.py')",
+                        },
+                    },
+                    "required": ["pattern"],
+                },
+                handler=grep,
+            ),
+            ToolDefinition(
+                name="glob",
+                description="Find files matching a glob pattern.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Glob pattern (e.g., '*.py', 'test_*.js')",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Directory to search in (default: current dir)",
+                        },
+                    },
+                    "required": ["pattern"],
+                },
+                handler=glob,
+            ),
+            ToolDefinition(
+                name="list_directory",
+                description="List directory contents with details.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Directory path to list (default: current dir)",
+                        },
+                    },
+                },
+                handler=list_directory,
+            ),
+            ToolDefinition(
                 name="read_file",
                 description="Read file contents from workspace.",
                 parameters={
@@ -604,5 +696,128 @@ def build_builtin_tool_registry(
                 ),
             ]
         )
+
+    # ─── Git tools ─────────────────────────────────────────────
+
+    def git_status(
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        """Show git status."""
+        result = workspace.run_bash("git status --short")
+        branch_result = workspace.run_bash("git branch --show-current 2>/dev/null || echo 'no git'")
+        branch = branch_result.strip()
+        if not result.strip():
+            return f"On branch {branch}\nNothing to commit, working tree clean"
+        return f"On branch {branch}\n{result}"
+
+    def git_diff(
+        path: str = "",
+        staged: bool = False,
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        """Show git diff."""
+        cmd = "git diff"
+        if staged:
+            cmd += " --staged"
+        if path:
+            cmd += f" -- {path}"
+        return workspace.run_bash(cmd)
+
+    def git_log(
+        count: int = 10,
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        """Show recent git commits."""
+        cmd = f"git log --oneline -{count}"
+        return workspace.run_bash(cmd)
+
+    def git_commit(
+        message: str,
+        add_all: bool = True,
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        """Create a git commit."""
+        if add_all:
+            workspace.run_bash("git add -A")
+        result = workspace.run_bash(f'git commit -m "{message}"')
+        return result
+
+    def git_branch(
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        """Show git branches."""
+        return workspace.run_bash("git branch -a")
+
+    tool_definitions.extend([
+        ToolDefinition(
+            name="git_status",
+            description="Show git status (branch, changed files).",
+            parameters={
+                "type": "object",
+                "properties": {},
+            },
+            handler=git_status,
+        ),
+        ToolDefinition(
+            name="git_diff",
+            description="Show git diff for unstaged or staged changes.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Optional specific file path",
+                    },
+                    "staged": {
+                        "type": "boolean",
+                        "description": "Show staged changes instead of unstaged",
+                    },
+                },
+            },
+            handler=git_diff,
+        ),
+        ToolDefinition(
+            name="git_log",
+            description="Show recent git commits.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of commits to show (default: 10)",
+                    },
+                },
+            },
+            handler=git_log,
+        ),
+        ToolDefinition(
+            name="git_commit",
+            description="Create a git commit with a message.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Commit message",
+                    },
+                    "add_all": {
+                        "type": "boolean",
+                        "description": "Stage all changes before committing (default: true)",
+                    },
+                },
+                "required": ["message"],
+            },
+            handler=git_commit,
+        ),
+        ToolDefinition(
+            name="git_branch",
+            description="Show all git branches.",
+            parameters={
+                "type": "object",
+                "properties": {},
+            },
+            handler=git_branch,
+        ),
+    ])
 
     return ToolRegistry(tool_definitions)
