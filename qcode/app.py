@@ -5,7 +5,6 @@ from typing import Optional
 
 from qcode.config import AppConfig
 from qcode.config_profiles import render_profile_list
-from qcode.harness.cli import CliHarness
 from qcode.prompts import (
     build_compaction_system_prompt,
     build_subagent_system_prompt,
@@ -138,7 +137,9 @@ def build_subagent_runner(
     )
 
 
-def build_cli_harness(config: AppConfig) -> CliHarness:
+def build_cli_harness(config: AppConfig):
+    from qcode.harness.cli_legacy import CliHarness
+
     event_log_sink = build_event_sink(config.event_log_path)
     cli_event_sink = CallbackEventSink()
     event_sink = CompositeEventSink([event_log_sink, cli_event_sink])
@@ -415,3 +416,67 @@ def build_verification_loop_manager(
         lead_name=DEFAULT_LEAD_NAME,
         event_sink=event_sink,
     )
+
+
+def build_engine_for_tui(config: AppConfig) -> AgentEngine:
+    """Build a lightweight engine for TUI mode (no team, no background)."""
+    import hashlib
+    from qcode.runtime.compaction import ConversationCompactor
+    from qcode.runtime.compaction_middleware import CompactionMiddleware
+    from qcode.runtime.context_budgeter import ContextBudgeter, estimate_text_tokens
+    from qcode.tools.builtin_tools import build_builtin_tool_registry
+
+    # Load project memory (CLAUDE.md equivalent)
+    memory_content = _load_project_memory(config.workdir)
+    system_prompt = build_system_prompt(config.workdir)
+    if memory_content:
+        system_prompt += f"\n\n## Project Memory\n{memory_content}"
+    provider = build_chat_provider(config, system_prompt)
+    tool_registry = build_builtin_tool_registry(
+        config.workdir,
+        shell_timeout=config.shell_timeout,
+    )
+
+    transcript_dir = config.transcript_dir or (config.workdir / ".transcripts")
+    compactor = ConversationCompactor(
+        build_chat_provider(config, build_compaction_system_prompt(config.workdir)),
+        transcript_dir=transcript_dir,
+        token_threshold=config.compaction_token_threshold,
+        keep_recent_tool_results=config.compaction_keep_recent_tool_results,
+        summary_ratio=config.compaction_summary_ratio,
+    )
+    budgeter = ContextBudgeter(
+        max_context_window=config.max_context_window,
+        target_ratio=config.context_target_ratio,
+        safety_margin_tokens=config.context_safety_margin_tokens,
+        summary_ratio=config.compaction_summary_ratio,
+        reserved_prompt_tokens=estimate_text_tokens(system_prompt),
+    )
+    goal_store = build_goal_store(config)
+
+    middleware = MiddlewarePipeline([
+        GoalMiddleware(goal_store),
+        CompactionMiddleware(compactor, budgeter),
+        TodoReminderMiddleware(config.todo_reminder_interval),
+    ])
+
+    return AgentEngine(
+        provider,
+        tool_registry,
+        middleware=middleware,
+    )
+
+
+def _load_project_memory(workdir: Path) -> str:
+    """Load ~/.qcode/projects/<hash>/memory.md."""
+    import hashlib
+    from pathlib import Path as P
+    cwd = str(workdir)
+    h = hashlib.md5(cwd.encode()).hexdigest()[:12]
+    memory_path = P.home() / ".qcode" / "projects" / h / "memory.md"
+    if memory_path.exists():
+        try:
+            return memory_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+    return ""

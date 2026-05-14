@@ -2,6 +2,12 @@
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
+.qcode/
+.tasks/
+.team/
+.transcripts/
 .qcode/auth.json
 .qcode/config.toml
 .qcode/events.jsonl
+.qcode/sessions/

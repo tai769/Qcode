@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 from qcode.providers.base import EventType, ResponseEvent, ToolCallEvent
 from qcode.runtime.context import ToolExecutionContext
@@ -17,6 +18,8 @@ from qcode.tools.registry import ToolRegistry
 
 
 ToolOutputHandler = Callable[[str, str], None]
+PermissionDecision = Literal["allow", "deny", "ask"]
+PermissionChecker = Callable[[str, Dict[str, Any]], PermissionDecision]
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,7 @@ class SingleToolExecutionResult:
     used_todo: bool
     tool_name: str
     output: str
+    permission_granted: bool = True
 
 
 @dataclass
@@ -80,12 +84,15 @@ class ToolCallExecutor:
         tool_registry: ToolRegistry,
         event_sink: Optional[EventSink] = None,
         output_handler: Optional[ToolOutputHandler] = None,
+        permission_checker: Optional[PermissionChecker] = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.event_sink = event_sink or NullEventSink()
         self.output_handler = output_handler
+        self.permission_checker = permission_checker
         self._consecutive_failures: Dict[str, int] = {}
         self._MAX_CONSECUTIVE_FAILURES = 10
+        self._permission_whitelist: Dict[str, str] = {}  # tool_name -> "session" | "always"
 
     def execute(
         self,
@@ -140,27 +147,48 @@ class ToolCallExecutor:
                     f"You provided: {actual_input}"
                     f"Please retry with valid JSON (double-quoted keys and values)"
                 )
-        else:
-            # Reset failure count on success
-            self._consecutive_failures[function_name] = 0
-            self._emit_event(
-                "tool.call",
-                {
-                    "session_id": session.session_id,
-                    "tool": function_name,
-                    "tool_call_id": tool_call_id,
-                    "arguments_preview": arguments_preview,
-                },
+            return SingleToolExecutionResult(
+                message={"role": "tool", "tool_call_id": tool_call.get("id"), "content": output},
+                used_todo=False,
+                tool_name=function_name,
+                output=output,
+                permission_granted=True,
             )
-            output = self.tool_registry.dispatch(
-                function_name,
-                function_args,
-                context=ToolExecutionContext(session=session),
+
+        # Permission check
+        permission_granted = self._check_permission(function_name, function_args)
+        if not permission_granted:
+            output = f"Permission denied for tool '{function_name}'. User rejected this action."
+            if emit_output and self.output_handler:
+                self.output_handler(function_name, output)
+            return SingleToolExecutionResult(
+                message={"role": "tool", "tool_call_id": tool_call.get("id"), "content": output},
+                used_todo=False,
+                tool_name=function_name,
+                output=output,
+                permission_granted=False,
             )
-            if output.startswith("Error:"):
-                status = "error"
-                error_type = "tool_error"
-                error_summary = output[:200]
+
+        # Reset failure count on success
+        self._consecutive_failures[function_name] = 0
+        self._emit_event(
+            "tool.call",
+            {
+                "session_id": session.session_id,
+                "tool": function_name,
+                "tool_call_id": tool_call_id,
+                "arguments_preview": arguments_preview,
+            },
+        )
+        output = self.tool_registry.dispatch(
+            function_name,
+            function_args,
+            context=ToolExecutionContext(session=session),
+        )
+        if output.startswith("Error:"):
+            status = "error"
+            error_type = "tool_error"
+            error_summary = output[:200]
 
         if status == "error" and not error_summary:
             error_summary = output[:200]
@@ -196,15 +224,31 @@ class ToolCallExecutor:
             )
 
         return SingleToolExecutionResult(
-            message={
-                "role": "tool",
-                "tool_call_id": tool_call.get("id"),
-                "content": output,
-            },
+            message={"role": "tool", "tool_call_id": tool_call.get("id"), "content": output},
             used_todo=function_name == "todo" and not output.startswith("Error:"),
-        tool_name=function_name,
-        output=output,
-    )
+            tool_name=function_name,
+            output=output,
+            permission_granted=True,
+        )
+
+    def _check_permission(self, tool_name: str, args: Dict[str, Any]) -> bool:
+        if tool_name in self._permission_whitelist:
+            return True
+        if self.permission_checker is None:
+            return True
+        decision = self.permission_checker(tool_name, args)
+        if decision == "allow":
+            return True
+        if decision == "deny":
+            return False
+        # "ask" — for now treat as denied (TUI will handle interactive prompt)
+        return False
+
+    def grant_session_permission(self, tool_name: str) -> None:
+        self._permission_whitelist[tool_name] = "session"
+
+    def clear_session_permissions(self) -> None:
+        self._permission_whitelist.clear()
 
     @staticmethod
     def _preview_arguments(tool_call: ToolCall) -> str:
@@ -273,6 +317,9 @@ class StreamingToolExecutor:
         self._order: List[str] = []
         self._session: Optional[ConversationSession] = None
         self._turn_id = 0
+        self._pending_permission: Optional[_StreamingToolState] = None
+        self._permission_event: Optional[asyncio.Event] = None
+        self._permission_result: PermissionDecision = "deny"
 
     def begin_turn(self, session: ConversationSession) -> None:
         self._turn_id += 1
@@ -280,6 +327,9 @@ class StreamingToolExecutor:
         self._pool = ThreadPoolExecutor(max_workers=self.max_workers)
         self._states = {}
         self._order = []
+        self._pending_permission = None
+        self._permission_event = None
+        self._permission_result = "deny"
         self._emit_event(
             "tool.stream.turn_started",
             {

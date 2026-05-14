@@ -1,6 +1,9 @@
 """Conversation session state."""
 
-from typing import Iterable, Optional
+import json
+import time
+from pathlib import Path
+from typing import Iterable, List, Optional
 from uuid import uuid4
 
 from qcode.runtime.types import Message, Messages
@@ -22,6 +25,7 @@ class ConversationSession:
         self._run_stop_reason: Optional[str] = None
         self._idle_poll_mode: Optional[str] = None
         self._last_response_id: Optional[str] = None
+        self.created_at: float = time.time()
         self._recompute_last_response_id()
 
     @property
@@ -104,3 +108,47 @@ class ConversationSession:
 
     def __len__(self) -> int:
         return len(self._messages)
+
+    def save(self, sessions_dir: Path) -> Path:
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        path = sessions_dir / f"{ts}-{self.session_id[:8]}.jsonl"
+        with path.open("w", encoding="utf-8") as f:
+            meta = {
+                "type": "session_meta",
+                "session_id": self.session_id,
+                "created_at": self.created_at,
+                "message_count": len(self._messages),
+            }
+            f.write(json.dumps(meta, ensure_ascii=False) + "\n")
+            for msg in self._messages:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+        return path
+
+    @classmethod
+    def load(cls, path: Path) -> "ConversationSession":
+        messages: List[Message] = []
+        session_id = None
+        created_at = None
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                if obj.get("type") == "session_meta":
+                    session_id = obj.get("session_id")
+                    created_at = obj.get("created_at")
+                    continue
+                messages.append(obj)
+        session = cls(messages=messages, session_id=session_id)
+        if created_at:
+            session.created_at = created_at
+        return session
+
+    @staticmethod
+    def find_latest(sessions_dir: Path) -> Optional[Path]:
+        if not sessions_dir.exists():
+            return None
+        files = sorted(sessions_dir.glob("*.jsonl"), reverse=True)
+        return files[0] if files else None

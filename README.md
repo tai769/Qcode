@@ -1,64 +1,79 @@
-# Qcode 开发环境
+# Qcode
 
-## 快速启动
+AI coding agent with team collaboration — CLI + TUI.
+
+## Quick Start
 
 ```bash
-# 一键启动前后端服务
-./start.sh
+# Install
+pip install -e .
 
-# 运行健康检查
-./test.sh
+# Interactive TUI
+python -m qcode
+
+# One-shot mode
+python -m qcode "explain this function"
+echo "refactor this" | python -m qcode -p -
+
+# Resume last session
+python -m qcode -c
+
+# Specify working directory
+python -m qcode --cwd ~/myproject
 ```
 
-## 手动启动
+## Features
 
-### 前端
+- **Multi-agent team**: Lead + coder/tester/reviewer/architect/devops/dba
+- **Task graph**: Durable task state with role-based claiming
+- **Verification loops**: Coder-tester cycles until checks pass
+- **Session persistence**: Save/resume conversations
+- **Permission system**: Confirm dangerous tool calls
+- **Slash commands**: /help /clear /compact /model /team /task /verify /save /load
+
+## Configuration
+
 ```bash
-cd frontend
-npm install
-npm run dev
-# 访问 http://localhost:5173
+# ~/.qcode/config.toml
+[default]
+model = "gpt-4"
+max_tokens = 8000
+
+[provider.openai]
+api_key = "sk-..."
+base_url = "https://api.openai.com/v1"
+
+[permission]
+auto_allow = ["read_file", "grep", "glob"]
+always_ask = ["bash", "write", "edit"]
+
+[ui]
+theme = "monokai"
+auto_compact_at = 0.8
 ```
 
-### 后端
+## Project Structure
+
+```
+qcode/
+├── api/            # FastAPI Web API (future)
+├── core/           # Core abstractions
+├── harness/        # CLI + TUI entry points
+│   ├── cli.py      # CLI argument parsing
+│   ├── tui.py      # Textual TUI application
+│   └── cli_legacy.py  # Legacy interactive CLI
+├── providers/      # LLM provider adapters
+├── runtime/        # Agent engine, session, tools
+├── telemetry/      # Event logging
+├── tools/          # Built-in tool implementations
+└── utils/          # Utilities
+```
+
+## Environment Variables
+
 ```bash
-cd backend_server
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
-# 访问 http://localhost:8000
-```
-
-## 项目结构
-
-```
-Qcode/
-├── frontend/           # React 18 + TypeScript + Vite 5
-│   ├── src/
-│   │   ├── components/  # UI组件
-│   │   ├── stores/      # Zustand状态管理
-│   │   ├── services/    # API服务
-│   │   └── types/       # TypeScript类型
-│   └── package.json
-├── backend_server/      # FastAPI后端
-│   ├── main.py         # API入口
-│   ├── requirements.txt
-│   └── venv/           # Python虚拟环境
-├── start.sh            # 一键启动脚本
-└── test.sh             # 健康检查脚本
-```
-
-## 技术栈
-
-- **前端**: React 18, TypeScript, Vite 5, Tailwind CSS, Zustand
-- **后端**: FastAPI, Uvicorn, SQLAlchemy, Pydantic
-- **通信**: REST API + SSE (计划WebSocket)
-
-## 故障排除
-
-如果端口被占用:
-```bash
-lsof -ti:5173 | xargs kill -9  # 清理前端端口
-lsof -ti:8000 | xargs kill -9  # 清理后端端口
+QCODE_API_KEY=sk-...        # API key
+QCODE_API_BASE_URL=...      # API base URL
+QCODE_MODEL=gpt-4           # Default model
+QCODE_MAX_TOKENS=8000       # Max output tokens
 ```
