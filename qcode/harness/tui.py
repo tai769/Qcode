@@ -570,6 +570,7 @@ class QcodeApp(App):
         Binding("ctrl+l", "clear_chat", "Clear"),
         Binding("ctrl+t", "toggle_sidebar", "Sidebar"),
         Binding("ctrl+m", "pick_model", "Model"),
+        Binding("ctrl+shift+c", "copy_last", "Copy", show=False),
         Binding("escape", "stop", "Stop", show=False),
     ]
 
@@ -597,6 +598,7 @@ class QcodeApp(App):
         self._completion_index = 0
         self._stream_refresh_task: Optional[asyncio.Task] = None
         self._reasoning_shown = False
+        self._last_assistant_message: str = ""
         self._load_global_permissions()
 
     def compose(self) -> ComposeResult:
@@ -911,8 +913,10 @@ class QcodeApp(App):
                 ]
                 content = "".join(text_parts)
             if content:
+                self._last_assistant_message = content
                 chat.add_assistant_text(content)
             elif self._streaming_text:
+                self._last_assistant_message = self._streaming_text
                 chat.flush_streaming()
             self._streaming_text = ""
             thinking.stop_thinking()
@@ -989,6 +993,7 @@ class QcodeApp(App):
                 "  /git           Show git status\n"
                 "  /diff [file]   Show git diff\n"
                 "  /tree [path]   Show file tree\n"
+                "  /copy          Copy last message to clipboard\n"
                 "  /instructions  Show custom instructions\n"
                 "\n**Shortcuts:**\n"
                 "  Esc/Ctrl+C     Stop/Quit\n"
@@ -1038,6 +1043,8 @@ class QcodeApp(App):
             self._show_git_diff(arg)
         elif cmd == "/tree":
             self._show_file_tree(arg)
+        elif cmd == "/copy":
+            self._copy_last_message()
         else:
             chat.add_system(f"Unknown: {cmd}. Type /help")
 
@@ -1269,6 +1276,38 @@ class QcodeApp(App):
         except Exception as e:
             chat.add_error(f"Tree error: {e}")
 
+    def _copy_last_message(self) -> None:
+        """Copy last assistant message to clipboard."""
+        chat = self.query_one("#chat-panel", ChatPanel)
+
+        if not self._last_assistant_message:
+            chat.add_system("[yellow]No message to copy.[/]")
+            return
+
+        # Try to copy to clipboard
+        import subprocess
+        try:
+            # Try xclip (Linux)
+            subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=self._last_assistant_message.encode(),
+                check=True
+            )
+            chat.add_system("[green]Copied to clipboard![/]")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            try:
+                # Try pbcopy (macOS)
+                subprocess.run(
+                    ["pbcopy"],
+                    input=self._last_assistant_message.encode(),
+                    check=True
+                )
+                chat.add_system("[green]Copied to clipboard![/]")
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                # Fallback: show the message
+                chat.add_system("**Last message:**")
+                chat.add_assistant_text(self._last_assistant_message)
+
     def _on_setup_complete(self, result: bool) -> None:
         if result:
             chat = self.query_one("#chat-panel", ChatPanel)
@@ -1420,6 +1459,39 @@ class QcodeApp(App):
         self._refresh_todo_panel()
         chat = self.query_one("#chat-panel", ChatPanel)
         chat.add_system("[green]New session started.[/]")
+
+    def action_copy_last(self) -> None:
+        """Copy last assistant message to clipboard (Ctrl+Shift+C)."""
+        if not self._last_assistant_message:
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.add_system("[yellow]No message to copy.[/]")
+            return
+
+        # Copy to clipboard using xclip or pbcopy
+        import subprocess
+        try:
+            # Try xclip (Linux)
+            subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=self._last_assistant_message.encode(),
+                check=True
+            )
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.add_system("[green]Copied to clipboard![/]")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            try:
+                # Try pbcopy (macOS)
+                subprocess.run(
+                    ["pbcopy"],
+                    input=self._last_assistant_message.encode(),
+                    check=True
+                )
+                chat = self.query_one("#chat-panel", ChatPanel)
+                chat.add_system("[green]Copied to clipboard![/]")
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                # Fallback: show the message
+                chat = self.query_one("#chat-panel", ChatPanel)
+                chat.add_system("[yellow]Clipboard not available. Use /copy to see the message.[/]")
 
 
 QCODE_HOME = Path.home() / ".qcode"
