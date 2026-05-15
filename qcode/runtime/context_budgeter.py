@@ -48,8 +48,13 @@ class ContextBudgeter:
         messages: Sequence[Message],
         *,
         force_compaction: bool = False,
+        cumulative_input_tokens: int = 0,
     ) -> ContextBudgetDecision:
-        message_tokens = self.estimate_tokens(messages)
+        # Prefer real token counts from API usage over heuristic estimation
+        if cumulative_input_tokens > 0:
+            message_tokens = cumulative_input_tokens
+        else:
+            message_tokens = self.estimate_tokens(messages)
         target_context_tokens = int(self.max_context_window * self.target_ratio)
         available_message_budget_tokens = max(
             0,

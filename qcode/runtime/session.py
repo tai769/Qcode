@@ -25,6 +25,7 @@ class ConversationSession:
         self._run_stop_reason: Optional[str] = None
         self._idle_poll_mode: Optional[str] = None
         self._last_response_id: Optional[str] = None
+        self._cumulative_input_tokens: int = 0
         self.created_at: float = time.time()
         self._recompute_last_response_id()
 
@@ -48,6 +49,10 @@ class ConversationSession:
     def replace_messages(self, messages: Iterable[Message]) -> None:
         self._messages = list(messages)
         self._recompute_last_response_id()
+        self._cumulative_input_tokens = 0
+
+    def add_input_tokens(self, count: int) -> None:
+        self._cumulative_input_tokens += count
 
     def request_compaction(self, focus: Optional[str] = None) -> None:
         cleaned_focus = (focus or "").strip()

@@ -241,12 +241,21 @@ class StatusBar(Static):
         self._provider = ""
         self._input_tokens = 0
         self._output_tokens = 0
+        self._cache_creation = 0
+        self._cache_read = 0
         self._turn_count = 0
 
     def render(self) -> str:
         token_str = ""
         if self._input_tokens > 0 or self._output_tokens > 0:
             token_str = f" │ {self._input_tokens:,}→{self._output_tokens:,} tok"
+            if self._cache_read > 0 or self._cache_creation > 0:
+                cache_parts = []
+                if self._cache_read > 0:
+                    cache_parts.append(f"read:{self._cache_read:,}")
+                if self._cache_creation > 0:
+                    cache_parts.append(f"write:{self._cache_creation:,}")
+                token_str += f" [green](cache {' '.join(cache_parts)})[/]"
         turn_str = f" │ turn {self._turn_count}" if self._turn_count > 0 else ""
         return f" [bold cyan]Qcode[/] │ {self._provider}/{self._model} │ {self._status}{token_str}{turn_str}"
 
@@ -259,9 +268,11 @@ class StatusBar(Static):
         self._status = status
         self.refresh()
 
-    def update_tokens(self, input_tokens: int, output_tokens: int) -> None:
+    def update_tokens(self, input_tokens: int, output_tokens: int, cache_creation: int = 0, cache_read: int = 0) -> None:
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
+        self._cache_creation = cache_creation
+        self._cache_read = cache_read
         self.refresh()
 
     def increment_turn(self) -> None:
@@ -390,7 +401,7 @@ class TeamPanel(Static):
 
 class ChatPanel(RichLog):
     def __init__(self, **kwargs) -> None:
-        super().__init__(markup=True, wrap=True, highlight=True, **kwargs)
+        super().__init__(markup=True, wrap=True, highlight=True, auto_scroll=False, **kwargs)
         self._streaming_line = ""
         self._streaming_widget: Optional[Static] = None
         self._stream_dirty = False
@@ -631,11 +642,11 @@ class QcodeApp(App):
         self._update_status_bar()
         self._refresh_todo_panel()
         self._refresh_team_panel()
-        self._refresh_git_panel()
+        self._refresh_git_panel_async()
         self._load_memory()
 
     def _refresh_git_panel(self) -> None:
-        """Refresh git status in the sidebar."""
+        """Refresh git status in the sidebar (blocking, use _refresh_git_panel_async)."""
         import subprocess
         try:
             panel = self.query_one("#git-panel", Static)
@@ -663,6 +674,11 @@ class QcodeApp(App):
             panel.update("\n".join(lines))
         except Exception:
             pass
+
+    @work(thread=True)
+    def _refresh_git_panel_async(self) -> None:
+        """Non-blocking git panel refresh."""
+        self._refresh_git_panel()
 
     # ─── Status bar ──────────────────────────────────────────────
 
@@ -726,7 +742,7 @@ class QcodeApp(App):
         self._completion_index = 0
 
     @on(Input.Submitted, "#prompt-input")
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
+    def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         if not text:
             return
@@ -735,10 +751,11 @@ class QcodeApp(App):
         if text.startswith("/"):
             self._handle_slash_command(text)
             return
-        await self._run_agent(text)
+        self._run_agent(text)
 
     # ─── Agent execution ─────────────────────────────────────────
 
+    @work(exclusive=True)
     async def _run_agent(self, user_text: str) -> None:
         if self._is_running:
             return
@@ -763,6 +780,8 @@ class QcodeApp(App):
                     self._refresh_todo_panel()
                 if event.type == "stopped":
                     chat.add_system(f"[yellow]Stopped: {event.data.get('reason', 'cancelled')}[/]")
+                # Yield to the event loop so UI stays responsive (clicks, key presses)
+                await asyncio.sleep(0)
         except Exception as exc:
             chat.add_error(str(exc))
         finally:
@@ -778,7 +797,7 @@ class QcodeApp(App):
     async def _stream_refresh_loop(self) -> None:
         """Periodically flush streaming content to the UI."""
         while True:
-            await asyncio.sleep(0.15)  # ~6-7 fps refresh rate
+            await asyncio.sleep(0.08)  # ~12 fps refresh rate
             chat = self.query_one("#chat-panel", ChatPanel)
             chat.render_streaming_now()
 
@@ -914,7 +933,12 @@ class QcodeApp(App):
                 content = "".join(text_parts)
             if content:
                 self._last_assistant_message = content
-                chat.add_assistant_text(content)
+                if self._streaming_text:
+                    # Streaming already rendered the content; just flush any remainder
+                    chat.flush_streaming()
+                else:
+                    # No streaming occurred (e.g. cached response); write the full content
+                    chat.add_assistant_text(content)
             elif self._streaming_text:
                 self._last_assistant_message = self._streaming_text
                 chat.flush_streaming()
@@ -956,7 +980,9 @@ class QcodeApp(App):
         elif event.type == "usage":
             input_tokens = event.data.get("input_tokens", 0)
             output_tokens = event.data.get("output_tokens", 0)
-            status.update_tokens(input_tokens, output_tokens)
+            cache_creation = event.data.get("cache_creation_tokens", 0)
+            cache_read = event.data.get("cache_read_tokens", 0)
+            status.update_tokens(input_tokens, output_tokens, cache_creation, cache_read)
 
         elif event.type == "error":
             chat.add_error(event.data.get("message", "Unknown error"))

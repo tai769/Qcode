@@ -1,4 +1,4 @@
-"""Builtin tools available to the agent."""
+"""Builtin tools available to the agent — with metadata for intelligent dispatch."""
 
 import json
 import time
@@ -7,7 +7,8 @@ from typing import Optional
 
 from qcode.runtime.background import BackgroundManager
 from qcode.runtime.context import ToolExecutionContext
-from qcode.tools.registry import ToolDefinition, ToolRegistry
+from qcode.tools.registry import ToolRegistry
+from qcode.tools.tool import Tool, build_tool
 from qcode.utils.workspace import Workspace
 
 
@@ -17,6 +18,8 @@ def build_builtin_tool_registry(
     background_manager: Optional[BackgroundManager] = None,
 ) -> ToolRegistry:
     workspace = Workspace(workdir, shell_timeout=shell_timeout)
+
+    # ── Tool handlers ────────────────────────────────────────────
 
     def bash(
         command: str,
@@ -30,7 +33,6 @@ def build_builtin_tool_registry(
         include: str = "",
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
-        """Search for a pattern in files."""
         cmd = f"grep -rn '{pattern}' {path}"
         if include:
             cmd += f" --include='{include}'"
@@ -45,7 +47,6 @@ def build_builtin_tool_registry(
         path: str = ".",
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
-        """Find files matching a glob pattern."""
         cmd = f"find {path} -name '{pattern}' -type f 2>/dev/null | head -100"
         result = workspace.run_bash(cmd)
         if not result.strip():
@@ -56,7 +57,6 @@ def build_builtin_tool_registry(
         path: str = ".",
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
-        """List directory contents."""
         cmd = f"ls -la {path} 2>/dev/null"
         return workspace.run_bash(cmd)
 
@@ -89,7 +89,6 @@ def build_builtin_tool_registry(
     ) -> str:
         if context is None:
             return "Error: Todo tool requires session context"
-
         return context.session.todo_manager.update(items)
 
     def compact(
@@ -98,7 +97,6 @@ def build_builtin_tool_registry(
     ) -> str:
         if context is None:
             return "Error: Compact tool requires session context"
-
         context.session.request_compaction(focus)
         return f"Compression requested. Focus: {focus}"
 
@@ -110,7 +108,6 @@ def build_builtin_tool_registry(
             return "Error: Background tool requires session context"
         if background_manager is None:
             return "Error: Background execution is not configured"
-
         return background_manager.run(context.session.session_id, command)
 
     def check_background(
@@ -121,8 +118,54 @@ def build_builtin_tool_registry(
             return "Error: Background tool requires session context"
         if background_manager is None:
             return "Error: Background execution is not configured"
-
         return background_manager.check(context.session.session_id, task_id)
+
+    # ── Git tools ────────────────────────────────────────────────
+
+    def git_status(
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        result = workspace.run_bash("git status --short")
+        branch_result = workspace.run_bash("git branch --show-current 2>/dev/null || echo 'no git'")
+        branch = branch_result.strip()
+        if not result.strip():
+            return f"On branch {branch}\nNothing to commit, working tree clean"
+        return f"On branch {branch}\n{result}"
+
+    def git_diff(
+        path: str = "",
+        staged: bool = False,
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        cmd = "git diff"
+        if staged:
+            cmd += " --staged"
+        if path:
+            cmd += f" -- {path}"
+        return workspace.run_bash(cmd)
+
+    def git_log(
+        count: int = 10,
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        cmd = f"git log --oneline -{count}"
+        return workspace.run_bash(cmd)
+
+    def git_commit(
+        message: str,
+        add_all: bool = True,
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        if add_all:
+            workspace.run_bash("git add -A")
+        return workspace.run_bash(f'git commit -m "{message}"')
+
+    def git_branch(
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        return workspace.run_bash("git branch -a")
+
+    # ── Port tools ───────────────────────────────────────────────
 
     def _clean_output_lines(output: str) -> list[str]:
         lines = []
@@ -176,7 +219,6 @@ def build_builtin_tool_registry(
             return {"error": f"Invalid port: {port}"}
         if not _lsof_available():
             return {"error": "lsof not available; port inspection requires lsof"}
-
         result = workspace.run_bash(f"lsof -nP -iTCP:{port} -sTCP:LISTEN -Fpcn")
         lines = _clean_output_lines(result)
         listeners = _parse_lsof_listeners(lines)
@@ -191,18 +233,8 @@ def build_builtin_tool_registry(
                 in_workspace = True
             elif command_line and workdir in command_line:
                 in_workspace = True
-            enriched.append(
-                {
-                    **listener,
-                    "cwd": cwd,
-                    "command_line": command_line,
-                    "in_workspace": in_workspace,
-                }
-            )
-        return {
-            "port": port,
-            "listeners": enriched,
-        }
+            enriched.append({**listener, "cwd": cwd, "command_line": command_line, "in_workspace": in_workspace})
+        return {"port": port, "listeners": enriched}
 
     def port_inspect(
         port: int,
@@ -223,22 +255,15 @@ def build_builtin_tool_registry(
         listeners = info.get("listeners", [])
         if not listeners:
             return f"Port {port} is not in use."
-
-        workspace_listeners = [
-            entry for entry in listeners if entry.get("in_workspace")
-        ]
-        foreign_listeners = [
-            entry for entry in listeners if not entry.get("in_workspace")
-        ]
+        workspace_listeners = [e for e in listeners if e.get("in_workspace")]
+        foreign_listeners = [e for e in listeners if not e.get("in_workspace")]
         stopped: list[int] = []
         signal = "-9" if force else "-15"
-
         for entry in workspace_listeners:
             pid = int(entry.get("pid", 0))
             if pid:
                 workspace.run_bash(f"kill {signal} {pid}")
                 stopped.append(pid)
-
         if foreign_listeners and not confirm:
             return (
                 "Port is still held by non-workspace processes. "
@@ -246,13 +271,11 @@ def build_builtin_tool_registry(
                 f"Stopped workspace PIDs: {stopped or '(none)'}\n"
                 f"Remaining: {json.dumps(foreign_listeners, indent=2, ensure_ascii=False)}"
             )
-
         for entry in foreign_listeners:
             pid = int(entry.get("pid", 0))
             if pid:
                 workspace.run_bash(f"kill {signal} {pid}")
                 stopped.append(pid)
-
         return f"Sent signal {signal} to PIDs: {stopped}"
 
     def _truncate_text(text: str, limit: int = 300) -> str:
@@ -274,48 +297,25 @@ def build_builtin_tool_registry(
             from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
             from playwright.sync_api import sync_playwright
         except Exception:
-            return (
-                "Error: Playwright is not installed. "
-                "Run: pip install playwright && python -m playwright install"
-            )
-
+            return "Error: Playwright is not installed. Run: pip install playwright && python -m playwright install"
         cleaned_url = url.strip()
         if not cleaned_url:
             return "Error: url is required"
-
         started_at = time.monotonic()
-        report: dict[str, object] = {
-            "status": "ok",
-            "url": cleaned_url,
-            "final_url": "",
-            "http_status": None,
-            "title": "",
-            "wait_for": wait_for.strip(),
-            "console_errors": [],
-            "page_errors": [],
-            "network_errors": [],
-            "screenshot_path": "",
-            "duration_ms": 0,
-        }
-
+        report: dict[str, object] = {"status": "ok", "url": cleaned_url, "final_url": "", "http_status": None, "title": "", "wait_for": wait_for.strip(), "console_errors": [], "page_errors": [], "network_errors": [], "screenshot_path": "", "duration_ms": 0}
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
-                context = browser.new_context(
-                    viewport={"width": int(viewport_width), "height": int(viewport_height)}
-                )
-                page = context.new_page()
+                ctx = browser.new_context(viewport={"width": int(viewport_width), "height": int(viewport_height)})
+                page = ctx.new_page()
                 console_errors: list[str] = []
                 page_errors: list[str] = []
                 network_errors: list[str] = []
-
                 def on_console(msg) -> None:
                     if msg.type == "error":
                         console_errors.append(_truncate_text(msg.text))
-
                 def on_page_error(exc: Exception) -> None:
                     page_errors.append(_truncate_text(str(exc)))
-
                 def on_request_failed(request) -> None:
                     try:
                         failure = request.failure
@@ -323,39 +323,23 @@ def build_builtin_tool_registry(
                             failure = failure()
                         detail = "request failed"
                         if isinstance(failure, dict):
-                            detail = (
-                                failure.get("error_text")
-                                or failure.get("errorText")
-                                or detail
-                            )
+                            detail = failure.get("error_text") or failure.get("errorText") or detail
                         elif hasattr(failure, "error_text"):
                             detail = getattr(failure, "error_text") or detail
                         elif failure:
                             detail = str(failure)
-                        network_errors.append(
-                            _truncate_text(f"{request.url} :: {detail}")
-                        )
+                        network_errors.append(_truncate_text(f"{request.url} :: {detail}"))
                     except Exception as exc:
-                        network_errors.append(
-                            _truncate_text(f"{request.url} :: failure handler error: {exc}")
-                        )
-
+                        network_errors.append(_truncate_text(f"{request.url} :: failure handler error: {exc}"))
                 page.on("console", on_console)
                 page.on("pageerror", on_page_error)
                 page.on("requestfailed", on_request_failed)
-
-                response = page.goto(
-                    cleaned_url,
-                    wait_until="load",
-                    timeout=int(timeout_seconds) * 1000,
-                )
+                response = page.goto(cleaned_url, wait_until="load", timeout=int(timeout_seconds) * 1000)
                 if wait_for:
                     page.wait_for_selector(wait_for, timeout=int(timeout_seconds) * 1000)
-
                 report["http_status"] = response.status if response is not None else None
                 report["final_url"] = page.url
                 report["title"] = page.title()
-
                 if screenshot_path:
                     try:
                         screenshot_file = workspace.safe_path(screenshot_path)
@@ -364,7 +348,6 @@ def build_builtin_tool_registry(
                     screenshot_file.parent.mkdir(parents=True, exist_ok=True)
                     page.screenshot(path=str(screenshot_file), full_page=full_page)
                     report["screenshot_path"] = str(screenshot_file.relative_to(workspace.root))
-
                 report["console_errors"] = console_errors
                 report["page_errors"] = page_errors
                 report["network_errors"] = network_errors
@@ -378,446 +361,281 @@ def build_builtin_tool_registry(
             report["error"] = _truncate_text(str(exc), limit=500)
         finally:
             report["duration_ms"] = int((time.monotonic() - started_at) * 1000)
-
         return json.dumps(report, indent=2, ensure_ascii=False)
 
-    tool_definitions = [
-            ToolDefinition(
-                name="bash",
-                description="Run a shell command.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The shell command to execute",
-                        }
-                    },
-                    "required": ["command"],
-                },
-                handler=bash,
-            ),
-            ToolDefinition(
-                name="grep",
-                description="Search for a pattern in files using grep.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Search pattern (regex supported)",
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Directory or file path to search in (default: current dir)",
-                        },
-                        "include": {
-                            "type": "string",
-                            "description": "File pattern to include (e.g., '*.py')",
-                        },
-                    },
-                    "required": ["pattern"],
-                },
-                handler=grep,
-            ),
-            ToolDefinition(
-                name="glob",
-                description="Find files matching a glob pattern.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Glob pattern (e.g., '*.py', 'test_*.js')",
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Directory to search in (default: current dir)",
-                        },
-                    },
-                    "required": ["pattern"],
-                },
-                handler=glob,
-            ),
-            ToolDefinition(
-                name="list_directory",
-                description="List directory contents with details.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Directory path to list (default: current dir)",
-                        },
-                    },
-                },
-                handler=list_directory,
-            ),
-            ToolDefinition(
-                name="read_file",
-                description="Read file contents from workspace.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "File path relative to workspace",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Max lines to read (optional)",
-                        },
-                        "offset": {
-                            "type": "integer",
-                            "description": "Starting line offset (optional)",
-                        },
-                    },
-                    "required": ["path"],
-                },
-                handler=read_file,
-            ),
-            ToolDefinition(
-                name="write_file",
-                description="Write content to a file in workspace.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "File path relative to workspace",
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Content to write",
-                        },
-                    },
-                    "required": ["path", "content"],
-                },
-                handler=write_file,
-            ),
-            ToolDefinition(
-                name="edit_file",
-                description="Replace exact text in a file.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "File path relative to workspace",
-                        },
-                        "old_text": {
-                            "type": "string",
-                            "description": "Text to replace",
-                        },
-                        "new_text": {
-                            "type": "string",
-                            "description": "New text",
-                        },
-                    },
-                    "required": ["path", "old_text", "new_text"],
-                },
-                handler=edit_file,
-            ),
-            ToolDefinition(
-                name="todo",
-                description=(
-                    "Update the structured task list. Use it for multi-step tasks "
-                    "and keep at most one item in_progress."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "items": {
-                            "type": "array",
-                            "description": "Ordered todo items for the current task.",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": {
-                                        "type": "string",
-                                        "description": "Stable todo identifier",
-                                    },
-                                    "text": {
-                                        "type": "string",
-                                        "description": "Task description",
-                                    },
-                                    "status": {
-                                        "type": "string",
-                                        "enum": ["pending", "in_progress", "completed"],
-                                    },
-                                },
-                                "required": ["id", "text", "status"],
-                            },
-                        }
-                    },
-                    "required": ["items"],
-                },
-                handler=todo,
-            ),
-            ToolDefinition(
-                name="compact",
-                description=(
-                    "Request conversation compression to keep the working context small "
-                    "while preserving continuity."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "focus": {
-                            "type": "string",
-                            "description": "What the compressed summary should preserve.",
-                        }
-                    },
-                },
-                handler=compact,
-            ),
-            ToolDefinition(
-                name="port_inspect",
-                description="Inspect which process is listening on a local TCP port.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "port": {
-                            "type": "integer",
-                            "description": "TCP port to inspect",
-                        }
-                    },
-                    "required": ["port"],
-                },
-                handler=port_inspect,
-            ),
-            ToolDefinition(
-                name="port_kill",
-                description=(
-                    "Stop processes listening on a TCP port. Auto-stops workspace-owned "
-                    "processes; requires confirm=true for other processes."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "port": {
-                            "type": "integer",
-                            "description": "TCP port to stop listeners on",
-                        },
-                        "confirm": {
-                            "type": "boolean",
-                            "description": "Allow stopping non-workspace processes",
-                        },
-                        "force": {
-                            "type": "boolean",
-                            "description": "Send SIGKILL instead of SIGTERM",
-                        },
-                    },
-                    "required": ["port"],
-                },
-                handler=port_kill,
-            ),
-            ToolDefinition(
-                name="ui_check",
-                description=(
-                    "Run a headless UI check against a URL and capture console/network errors "
-                    "with an optional screenshot."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "url": {
-                            "type": "string",
-                            "description": "URL to open in a headless browser",
-                        },
-                        "wait_for": {
-                            "type": "string",
-                            "description": "Optional CSS selector to wait for before capturing evidence",
-                        },
-                        "timeout_seconds": {
-                            "type": "integer",
-                            "description": "Timeout in seconds for page load/selector wait",
-                        },
-                        "screenshot_path": {
-                            "type": "string",
-                            "description": "Optional screenshot path relative to workspace",
-                        },
-                        "full_page": {
-                            "type": "boolean",
-                            "description": "Capture full-page screenshot",
-                        },
-                        "viewport_width": {
-                            "type": "integer",
-                            "description": "Viewport width in pixels",
-                        },
-                        "viewport_height": {
-                            "type": "integer",
-                            "description": "Viewport height in pixels",
-                        },
-                    },
-                    "required": ["url"],
-                },
-                handler=ui_check,
-            ),
-        ]
+    # ── Build tool list with metadata ────────────────────────────
 
-    if background_manager is not None:
-        tool_definitions.extend(
-            [
-                ToolDefinition(
-                    name="background_run",
-                    description=(
-                        "Run a shell command in the background and return immediately "
-                        "with a task id."
-                    ),
-                    parameters={
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "Long-running shell command to execute",
-                            }
-                        },
-                        "required": ["command"],
-                    },
-                    handler=background_run,
-                ),
-                ToolDefinition(
-                    name="check_background",
-                    description=(
-                        "Check one background task or list all background tasks for the "
-                        "current session."
-                    ),
-                    parameters={
-                        "type": "object",
-                        "properties": {
-                            "task_id": {
-                                "type": "string",
-                                "description": "Optional background task id",
-                            }
-                        },
-                    },
-                    handler=check_background,
-                ),
-            ]
-        )
-
-    # ─── Git tools ─────────────────────────────────────────────
-
-    def git_status(
-        context: Optional[ToolExecutionContext] = None,
-    ) -> str:
-        """Show git status."""
-        result = workspace.run_bash("git status --short")
-        branch_result = workspace.run_bash("git branch --show-current 2>/dev/null || echo 'no git'")
-        branch = branch_result.strip()
-        if not result.strip():
-            return f"On branch {branch}\nNothing to commit, working tree clean"
-        return f"On branch {branch}\n{result}"
-
-    def git_diff(
-        path: str = "",
-        staged: bool = False,
-        context: Optional[ToolExecutionContext] = None,
-    ) -> str:
-        """Show git diff."""
-        cmd = "git diff"
-        if staged:
-            cmd += " --staged"
-        if path:
-            cmd += f" -- {path}"
-        return workspace.run_bash(cmd)
-
-    def git_log(
-        count: int = 10,
-        context: Optional[ToolExecutionContext] = None,
-    ) -> str:
-        """Show recent git commits."""
-        cmd = f"git log --oneline -{count}"
-        return workspace.run_bash(cmd)
-
-    def git_commit(
-        message: str,
-        add_all: bool = True,
-        context: Optional[ToolExecutionContext] = None,
-    ) -> str:
-        """Create a git commit."""
-        if add_all:
-            workspace.run_bash("git add -A")
-        result = workspace.run_bash(f'git commit -m "{message}"')
-        return result
-
-    def git_branch(
-        context: Optional[ToolExecutionContext] = None,
-    ) -> str:
-        """Show git branches."""
-        return workspace.run_bash("git branch -a")
-
-    tool_definitions.extend([
-        ToolDefinition(
-            name="git_status",
-            description="Show git status (branch, changed files).",
+    tool_definitions: list[Tool] = [
+        # ── Read-only, concurrency-safe tools ────────────────────
+        build_tool(
+            name="read_file",
+            description="Read file contents from workspace.",
             parameters={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "path": {"type": "string", "description": "File path relative to workspace"},
+                    "limit": {"type": "integer", "description": "Max lines to read (optional)"},
+                    "offset": {"type": "integer", "description": "Starting line offset (optional)"},
+                },
+                "required": ["path"],
             },
-            handler=git_status,
+            handler=read_file,
+            is_read_only=True,
+            is_concurrency_safe=True,
         ),
-        ToolDefinition(
+        build_tool(
+            name="grep",
+            description="Search for a pattern in files using grep.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Search pattern (regex supported)"},
+                    "path": {"type": "string", "description": "Directory or file path to search in (default: current dir)"},
+                    "include": {"type": "string", "description": "File pattern to include (e.g., '*.py')"},
+                },
+                "required": ["pattern"],
+            },
+            handler=grep,
+            is_read_only=True,
+            is_concurrency_safe=True,
+        ),
+        build_tool(
+            name="glob",
+            description="Find files matching a glob pattern.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern (e.g., '*.py', 'test_*.js')"},
+                    "path": {"type": "string", "description": "Directory to search in (default: current dir)"},
+                },
+                "required": ["pattern"],
+            },
+            handler=glob,
+            is_read_only=True,
+            is_concurrency_safe=True,
+        ),
+        build_tool(
+            name="list_directory",
+            description="List directory contents with details.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory path to list (default: current dir)"},
+                },
+            },
+            handler=list_directory,
+            is_read_only=True,
+            is_concurrency_safe=True,
+        ),
+        build_tool(
+            name="git_status",
+            description="Show git status (branch, changed files).",
+            parameters={"type": "object", "properties": {}},
+            handler=git_status,
+            is_read_only=True,
+            is_concurrency_safe=True,
+        ),
+        build_tool(
             name="git_diff",
             description="Show git diff for unstaged or staged changes.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Optional specific file path",
-                    },
-                    "staged": {
-                        "type": "boolean",
-                        "description": "Show staged changes instead of unstaged",
-                    },
+                    "path": {"type": "string", "description": "Optional specific file path"},
+                    "staged": {"type": "boolean", "description": "Show staged changes instead of unstaged"},
                 },
             },
             handler=git_diff,
+            is_read_only=True,
+            is_concurrency_safe=True,
         ),
-        ToolDefinition(
+        build_tool(
             name="git_log",
             description="Show recent git commits.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "count": {
-                        "type": "integer",
-                        "description": "Number of commits to show (default: 10)",
-                    },
+                    "count": {"type": "integer", "description": "Number of commits to show (default: 10)"},
                 },
             },
             handler=git_log,
+            is_read_only=True,
+            is_concurrency_safe=True,
         ),
-        ToolDefinition(
+        build_tool(
+            name="git_branch",
+            description="Show all git branches.",
+            parameters={"type": "object", "properties": {}},
+            handler=git_branch,
+            is_read_only=True,
+            is_concurrency_safe=True,
+        ),
+
+        # ── Write tools (serial execution) ───────────────────────
+        build_tool(
+            name="bash",
+            description="Run a shell command.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The shell command to execute"},
+                },
+                "required": ["command"],
+            },
+            handler=bash,
+        ),
+        build_tool(
+            name="write_file",
+            description="Write content to a file in workspace.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path relative to workspace"},
+                    "content": {"type": "string", "description": "Content to write"},
+                },
+                "required": ["path", "content"],
+            },
+            handler=write_file,
+        ),
+        build_tool(
+            name="edit_file",
+            description="Replace exact text in a file.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path relative to workspace"},
+                    "old_text": {"type": "string", "description": "Text to replace"},
+                    "new_text": {"type": "string", "description": "New text"},
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+            handler=edit_file,
+        ),
+        build_tool(
+            name="todo",
+            description="Update the structured task list. Use it for multi-step tasks and keep at most one item in_progress.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "description": "Ordered todo items for the current task.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "description": "Stable todo identifier"},
+                                "text": {"type": "string", "description": "Task description"},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                            },
+                            "required": ["id", "text", "status"],
+                        },
+                    }
+                },
+                "required": ["items"],
+            },
+            handler=todo,
+        ),
+        build_tool(
+            name="compact",
+            description="Request conversation compression to keep the working context small while preserving continuity.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "focus": {"type": "string", "description": "What the compressed summary should preserve."},
+                },
+            },
+            handler=compact,
+        ),
+        build_tool(
             name="git_commit",
             description="Create a git commit with a message.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "Commit message",
-                    },
-                    "add_all": {
-                        "type": "boolean",
-                        "description": "Stage all changes before committing (default: true)",
-                    },
+                    "message": {"type": "string", "description": "Commit message"},
+                    "add_all": {"type": "boolean", "description": "Stage all changes before committing (default: true)"},
                 },
                 "required": ["message"],
             },
             handler=git_commit,
         ),
-        ToolDefinition(
-            name="git_branch",
-            description="Show all git branches.",
+        build_tool(
+            name="port_inspect",
+            description="Inspect which process is listening on a local TCP port.",
             parameters={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "port": {"type": "integer", "description": "TCP port to inspect"},
+                },
+                "required": ["port"],
             },
-            handler=git_branch,
+            handler=port_inspect,
+            is_read_only=True,
         ),
-    ])
+        build_tool(
+            name="port_kill",
+            description="Stop processes listening on a TCP port. Auto-stops workspace-owned processes; requires confirm=true for other processes.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "port": {"type": "integer", "description": "TCP port to stop listeners on"},
+                    "confirm": {"type": "boolean", "description": "Allow stopping non-workspace processes"},
+                    "force": {"type": "boolean", "description": "Send SIGKILL instead of SIGTERM"},
+                },
+                "required": ["port"],
+            },
+            handler=port_kill,
+            is_destructive=True,
+        ),
+        build_tool(
+            name="ui_check",
+            description="Run a headless UI check against a URL and capture console/network errors with an optional screenshot.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to open in a headless browser"},
+                    "wait_for": {"type": "string", "description": "Optional CSS selector to wait for before capturing evidence"},
+                    "timeout_seconds": {"type": "integer", "description": "Timeout in seconds for page load/selector wait"},
+                    "screenshot_path": {"type": "string", "description": "Optional screenshot path relative to workspace"},
+                    "full_page": {"type": "boolean", "description": "Capture full-page screenshot"},
+                    "viewport_width": {"type": "integer", "description": "Viewport width in pixels"},
+                    "viewport_height": {"type": "integer", "description": "Viewport height in pixels"},
+                },
+                "required": ["url"],
+            },
+            handler=ui_check,
+            is_read_only=True,
+        ),
+    ]
+
+    # ── Background tools (conditional) ───────────────────────────
+
+    if background_manager is not None:
+        tool_definitions.extend([
+            build_tool(
+                name="background_run",
+                description="Run a shell command in the background and return immediately with a task id.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "Long-running shell command to execute"},
+                    },
+                    "required": ["command"],
+                },
+                handler=background_run,
+            ),
+            build_tool(
+                name="check_background",
+                description="Check one background task or list all background tasks for the current session.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string", "description": "Optional background task id"},
+                    },
+                },
+                handler=check_background,
+                is_read_only=True,
+            ),
+        ])
 
     return ToolRegistry(tool_definitions)

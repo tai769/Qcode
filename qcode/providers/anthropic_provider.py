@@ -59,6 +59,7 @@ class AnthropicProvider(StreamingChatProvider):
             "Accept": "text/event-stream, application/json",
             "x-api-key": self.config.api_key,
             "anthropic-version": "2023-06-01",
+            "anthropic-beta": "prompt-caching-2024-07-31",
         }
 
         # Build Anthropic-format messages
@@ -111,7 +112,7 @@ class AnthropicProvider(StreamingChatProvider):
         payload: Dict[str, Any] = {
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
-            "system": self.system_prompt,
+            "system": [{"type": "text", "text": self.system_prompt, "cache_control": {"type": "ephemeral"}}],
             "messages": anthropic_messages,
             "stream": True,
         }
@@ -126,6 +127,9 @@ class AnthropicProvider(StreamingChatProvider):
                     "description": fn.get("description", ""),
                     "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
                 })
+            # Add cache_control breakpoint on the last tool
+            if anthropic_tools:
+                anthropic_tools[-1]["cache_control"] = {"type": "ephemeral"}
             payload["tools"] = anthropic_tools
 
         base = self.config.api_base_url.rstrip("/")
@@ -193,9 +197,15 @@ class AnthropicProvider(StreamingChatProvider):
             if event_type == "message_start":
                 message = event_data.get("message", {})
                 response_id = message.get("id")
+                usage = message.get("usage", {})
                 yield ResponseEvent(
                     event_type=EventType.CREATED,
                     response_id=response_id,
+                    usage=UsageInfo(
+                        input_tokens=usage.get("input_tokens", 0),
+                        cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
+                        cache_read_tokens=usage.get("cache_read_input_tokens", 0),
+                    ) if usage else None,
                 )
 
             elif event_type == "content_block_start":
@@ -266,6 +276,8 @@ class AnthropicProvider(StreamingChatProvider):
                     usage=UsageInfo(
                         input_tokens=usage.get("input_tokens", 0),
                         output_tokens=usage.get("output_tokens", 0),
+                        cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
+                        cache_read_tokens=usage.get("cache_read_input_tokens", 0),
                     ),
                 )
 
@@ -317,5 +329,7 @@ class AnthropicProvider(StreamingChatProvider):
             usage=UsageInfo(
                 input_tokens=usage.get("input_tokens", 0),
                 output_tokens=usage.get("output_tokens", 0),
+                cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
+                cache_read_tokens=usage.get("cache_read_input_tokens", 0),
             ),
         )

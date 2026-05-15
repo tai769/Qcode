@@ -51,6 +51,8 @@ class UsageInfo:
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,7 @@ class ChatResult:
     raw_response: Optional[JsonDict] = None
     response_id: Optional[str] = None
     streamed_output: bool = False
+    usage: Optional[UsageInfo] = None
 
 
 class ProviderProtocolError(RuntimeError):
@@ -138,6 +141,19 @@ class ResponseAccumulator:
         if event.response_id:
             self.response_id = event.response_id
 
+        # Accumulate usage from any event that carries it (e.g. message_start)
+        if event.usage and event.event_type != EventType.COMPLETED:
+            prev = self.usage
+            if prev:
+                self.usage = UsageInfo(
+                    input_tokens=event.usage.input_tokens or prev.input_tokens,
+                    output_tokens=event.usage.output_tokens or prev.output_tokens,
+                    cache_creation_tokens=event.usage.cache_creation_tokens or prev.cache_creation_tokens,
+                    cache_read_tokens=event.usage.cache_read_tokens or prev.cache_read_tokens,
+                )
+            else:
+                self.usage = event.usage
+
         if event.event_type == EventType.ERROR:
             raise ProviderStreamError(
                 event.error
@@ -171,7 +187,17 @@ class ResponseAccumulator:
         if event.event_type == EventType.COMPLETED:
             self.completed = True
             self.finish_reason = "tool_calls" if self._tool_order else "completed"
-            self.usage = event.usage or self.usage
+            if event.usage:
+                # Merge: prefer new values, carry over cache stats from earlier events
+                prev = self.usage
+                self.usage = UsageInfo(
+                    input_tokens=event.usage.input_tokens or (prev.input_tokens if prev else 0),
+                    output_tokens=event.usage.output_tokens or (prev.output_tokens if prev else 0),
+                    cache_creation_tokens=event.usage.cache_creation_tokens or (prev.cache_creation_tokens if prev else 0),
+                    cache_read_tokens=event.usage.cache_read_tokens or (prev.cache_read_tokens if prev else 0),
+                )
+            elif self.usage:
+                pass  # keep existing
 
     def to_chat_result(self) -> ChatResult:
         if not self.completed:
@@ -214,6 +240,9 @@ class ResponseAccumulator:
                 "input_tokens": self.usage.input_tokens,
                 "output_tokens": self.usage.output_tokens,
             }
+            if self.usage.cache_creation_tokens or self.usage.cache_read_tokens:
+                raw_response["usage"]["cache_creation_input_tokens"] = self.usage.cache_creation_tokens
+                raw_response["usage"]["cache_read_input_tokens"] = self.usage.cache_read_tokens
 
         return ChatResult(
             message=message,
@@ -221,6 +250,7 @@ class ResponseAccumulator:
             raw_response=raw_response or None,
             response_id=self.response_id,
             streamed_output=bool(text),
+            usage=self.usage,
         )
 
 

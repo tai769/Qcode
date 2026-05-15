@@ -128,10 +128,11 @@ class AgentEngine:
 
             accumulator = ResponseAccumulator()
             self.streaming_tool_executor.begin_turn(session)
+            tools = self.tool_registry.definitions()
             try:
                 for event in self.provider.stream_chat_completion(
                     session.messages,
-                    self.tool_registry.definitions(),
+                    tools,
                 ):
                     self._handle_response_event(session, event)
                     self.streaming_tool_executor.observe_event(event)
@@ -146,6 +147,8 @@ class AgentEngine:
             if result.streamed_output:
                 result.message["_streamed_output"] = True
             session.add_message(result.message)
+            if result.usage:
+                session.add_input_tokens(result.usage.input_tokens)
 
             self._emit_event(
                 "model.response",
@@ -245,9 +248,10 @@ class AgentEngine:
 
             def _producer():
                 try:
+                    tools = self.tool_registry.definitions()
                     for event in self.provider.stream_chat_completion(
                         session.messages,
-                        self.tool_registry.definitions(),
+                        tools,
                     ):
                         if self._cancel_requested:
                             break
@@ -269,7 +273,7 @@ class AgentEngine:
                     event: ResponseEvent = item
 
                     if self._cancel_requested:
-                        self.streaming_tool_executor.discard(wait_running=True)
+                        await asyncio.to_thread(self.streaming_tool_executor.discard, wait_running=True)
                         yield EngineEvent("stopped", {"reason": "user_cancel"})
                         return
 
@@ -290,7 +294,7 @@ class AgentEngine:
                         yield EngineEvent("reasoning_delta", {"text": event.delta})
 
             except Exception as exc:
-                self.streaming_tool_executor.discard(wait_running=True)
+                await asyncio.to_thread(self.streaming_tool_executor.discard, wait_running=True)
                 yield EngineEvent("error", {"message": str(exc)})
                 return
             finally:
@@ -302,6 +306,8 @@ class AgentEngine:
             if result.streamed_output:
                 result.message["_streamed_output"] = True
             session.add_message(result.message)
+            if result.usage:
+                session.add_input_tokens(result.usage.input_tokens)
 
             yield EngineEvent("model_response", {
                 "finish_reason": result.finish_reason,
@@ -310,11 +316,12 @@ class AgentEngine:
             })
 
             # Emit usage information if available
-            if result.raw_response and "usage" in result.raw_response:
-                usage = result.raw_response["usage"]
+            if result.usage:
                 yield EngineEvent("usage", {
-                    "input_tokens": usage.get("input_tokens", 0),
-                    "output_tokens": usage.get("output_tokens", 0),
+                    "input_tokens": result.usage.input_tokens,
+                    "output_tokens": result.usage.output_tokens,
+                    "cache_creation_tokens": result.usage.cache_creation_tokens,
+                    "cache_read_tokens": result.usage.cache_read_tokens,
                 })
 
             if "tool_calls" not in result.message or result.finish_reason != "tool_calls":

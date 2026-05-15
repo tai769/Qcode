@@ -19,13 +19,17 @@ class CompactionMiddleware:
     def before_model_call(self, run_context: AgentRunContext) -> None:
         session = run_context.session
         self.compactor.micro_compact(session)
-        decision = self.budgeter.decide(session.messages)
+        decision = self.budgeter.decide(
+            session.messages,
+            cumulative_input_tokens=session._cumulative_input_tokens,
+        )
 
         manual_focus = session.consume_compaction_request()
         if manual_focus is not None:
             manual_decision = self.budgeter.decide(
                 session.messages,
                 force_compaction=True,
+                cumulative_input_tokens=session._cumulative_input_tokens,
             )
             self.compactor.compact(
                 session,
