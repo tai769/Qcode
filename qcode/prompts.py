@@ -65,7 +65,8 @@ def _get_using_tools_section() -> str:
         "You can call multiple tools in a single response. "
         "If tools have no dependencies, call them in parallel.\n\n"
         "## Todo tool usage\n"
-        "Use todo to track multi-step tasks. Correct format:\n"
+        "Use todo to track multi-step tasks. The parameter must be 'items' (array), NOT 'todos' (string).\n\n"
+        "Correct format:\n"
         "```json\n"
         "{\n"
         '  "items": [\n'
@@ -73,7 +74,11 @@ def _get_using_tools_section() -> str:
         '    {"id": "2", "text": "Another task", "status": "in_progress"}\n'
         "  ]\n"
         "}\n"
-        "```\n"
+        "```\n\n"
+        "WRONG (will cause error):\n"
+        "```json\n"
+        '{"todos": "[{...}]"}  // Wrong! todos is not a parameter\n'
+        "```\n\n"
         "Status options: pending, in_progress, completed"
     )
 
