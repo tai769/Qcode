@@ -1896,26 +1896,26 @@ class QcodeApp(App):
         chat = self.query_one("#chat-panel", ChatPanel)
         team_dir = self.config.workdir / ".team"
         config_path = team_dir / "config.json"
-        if not config_path.exists():
-            chat.add_system(
-                "**No team configured.**\n\n"
-                "To setup a team, create `.team/config.json`:\n\n"
-                "```json\n"
-                "{\n"
-                '  "team_name": "My Team",\n'
-                '  "members": [\n'
-                '    {"name": "alice", "role": "frontend"},\n'
-                '    {"name": "bob", "role": "backend"}\n'
-                "  ]\n"
-                "}\n"
-                "```\n\n"
-                "Or use `/team setup` to create a team interactively."
-            )
-            return
-        data = json.loads(config_path.read_text())
-        members = data.get("members", [])
-        lines = [f"**Team: {data.get('team_name', 'default')}**"]
+
+        if config_path.exists():
+            data = json.loads(config_path.read_text())
+            members = data.get("members", [])
+            team_name = data.get("team_name", "custom")
+        else:
+            # Use default team members
+            from qcode.team_defaults import DEFAULT_TEAM_MEMBERS, DEFAULT_TEAM_NAME
+            members = DEFAULT_TEAM_MEMBERS.copy()
+            team_name = DEFAULT_TEAM_NAME
+
+        lines = [f"**Team: {team_name}**"]
         lines.append("")
+
+        # Show lead first
+        from qcode.team_defaults import DEFAULT_LEAD_NAME, DEFAULT_LEAD_ROLE
+        lines.append(f"  [bold]● {DEFAULT_LEAD_NAME}[/] ({DEFAULT_LEAD_ROLE}) [dim]- Team Lead[/]")
+        lines.append("")
+
+        # Show other members
         for m in members:
             name = m.get("name", "?")
             role = m.get("role", "?")
@@ -1927,6 +1927,10 @@ class QcodeApp(App):
             else:
                 icon = "[dim]◌[/]"
             lines.append(f"  {icon} {name} ({role})")
+
+        lines.append("")
+        lines.append("[dim]Use /team <name> to assign tasks to a teammate[/]")
+
         chat.add_assistant_text("\n".join(lines))
 
     def _show_tasks_in_chat(self) -> None:
@@ -2003,26 +2007,30 @@ class QcodeApp(App):
         panel = self.query_one("#team-panel", TeamPanel)
         team_dir = self.config.workdir / ".team"
         config_path = team_dir / "config.json"
+
         if config_path.exists():
             data = json.loads(config_path.read_text())
             members = data.get("members", [])
-            # Add active status based on recent activity
-            for member in members:
-                # Check if teammate has recent activity
-                teammate_dir = team_dir / "teammates" / member.get("name", "")
-                if teammate_dir.exists():
-                    # Check for recent files
-                    recent_files = list(teammate_dir.glob("*.md"))
-                    if recent_files:
-                        member["status"] = "active"
-                    else:
-                        member["status"] = "idle"
+        else:
+            # Use default team members
+            from qcode.team_defaults import DEFAULT_TEAM_MEMBERS
+            members = DEFAULT_TEAM_MEMBERS.copy()
+
+        # Add active status based on recent activity
+        for member in members:
+            # Check if teammate has recent activity
+            teammate_dir = team_dir / "teammates" / member.get("name", "")
+            if teammate_dir.exists():
+                # Check for recent files
+                recent_files = list(teammate_dir.glob("*.md"))
+                if recent_files:
+                    member["status"] = "active"
                 else:
                     member["status"] = "idle"
-            panel.update_members(members)
-        else:
-            # Show setup instructions if no team configured
-            panel.update_members([])
+            else:
+                member["status"] = "idle"
+
+        panel.update_members(members)
 
     # ─── Permission ──────────────────────────────────────────────
 
