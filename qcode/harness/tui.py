@@ -2026,19 +2026,8 @@ class QcodeApp(App):
             from qcode.team_defaults import DEFAULT_TEAM_MEMBERS
             members = DEFAULT_TEAM_MEMBERS.copy()
 
-        # Add active status based on recent activity
-        for member in members:
-            # Check if teammate has recent activity
-            teammate_dir = team_dir / "teammates" / member.get("name", "")
-            if teammate_dir.exists():
-                # Check for recent files
-                recent_files = list(teammate_dir.glob("*.md"))
-                if recent_files:
-                    member["status"] = "active"
-                else:
-                    member["status"] = "idle"
-            else:
-                member["status"] = "idle"
+        # Don't override status - use config.json status directly
+        # The status is managed by TeammateManager (idle/working/shutdown)
 
         panel.update_members(members)
 
