@@ -1102,6 +1102,8 @@ class QcodeApp(App):
         self._refresh_git_panel_async()
         self._refresh_context_panel_async()
         self._load_memory()
+        # Start periodic refresh for team panel
+        self.set_interval(5.0, self._refresh_team_panel)
 
     def _refresh_git_panel(self) -> None:
         """Refresh git status in the sidebar (blocking, use _refresh_git_panel_async)."""
