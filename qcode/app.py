@@ -457,12 +457,30 @@ def build_engine_for_tui(config: AppConfig, *, resume: bool = False) -> AgentEng
 
     # Build team manager with a simple engine factory
     def build_teammate_engine(name: str, role: str) -> AgentEngine:
+        from qcode.tools.team_tools import build_teammate_tool_definitions
+
         teammate_prompt = build_teammate_system_prompt(config.workdir, name, role)
         teammate_provider = build_chat_provider(config, teammate_prompt)
-        teammate_tools = build_builtin_tool_registry(
+
+        # Build tools for teammate (includes send_message, read_inbox, etc.)
+        base_tools = build_builtin_tool_registry(
             config.workdir,
             shell_timeout=config.shell_timeout,
         )
+        teammate_team_tools = build_teammate_tool_definitions(
+            team_manager,
+            None,  # No task graph in TUI mode
+            None,  # No protocol manager in TUI mode
+            None,  # No goal store in TUI mode
+            name,
+        )
+        teammate_tools = ToolRegistry(
+            [
+                *base_tools.tool_definitions(),
+                *teammate_team_tools,
+            ]
+        )
+
         return AgentEngine(
             teammate_provider,
             teammate_tools,
