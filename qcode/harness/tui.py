@@ -1991,12 +1991,15 @@ class QcodeApp(App):
                     chat.clear()
                     chat.add_system(f"[green]Session resumed: {len(self.session)} messages loaded[/]")
 
-                    # Re-display recent messages for context
+                    # Re-display recent messages for context (filter out reminders)
                     recent_messages = self.session.messages[-10:]  # Show last 10 messages
                     for msg in recent_messages:
                         role = msg.get("role", "")
                         content = msg.get("content", "")
                         if isinstance(content, str):
+                            # Skip system reminders
+                            if content.startswith("<reminder>") and content.endswith("</reminder>"):
+                                continue
                             if role == "user":
                                 chat.add_user_message(content[:200])
                             elif role == "assistant":
