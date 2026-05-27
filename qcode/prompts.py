@@ -63,7 +63,18 @@ def _get_using_tools_section() -> str:
         "Reserve using bash exclusively for system commands and terminal operations "
         "that require shell execution.\n"
         "You can call multiple tools in a single response. "
-        "If tools have no dependencies, call them in parallel."
+        "If tools have no dependencies, call them in parallel.\n\n"
+        "## Todo tool usage\n"
+        "Use todo to track multi-step tasks. Correct format:\n"
+        "```json\n"
+        "{\n"
+        '  "items": [\n'
+        '    {"id": "1", "text": "Task description", "status": "pending"},\n'
+        '    {"id": "2", "text": "Another task", "status": "in_progress"}\n'
+        "  ]\n"
+        "}\n"
+        "```\n"
+        "Status options: pending, in_progress, completed"
     )
 
 
