@@ -157,3 +157,39 @@ class ConversationSession:
             return None
         files = sorted(sessions_dir.glob("*.jsonl"), reverse=True)
         return files[0] if files else None
+
+    @staticmethod
+    def list_sessions(sessions_dir: Path, limit: int = 10) -> list[dict]:
+        """List recent sessions with metadata."""
+        if not sessions_dir.exists():
+            return []
+
+        sessions = []
+        files = sorted(sessions_dir.glob("*.jsonl"), reverse=True)
+
+        for path in files[:limit]:
+            try:
+                with path.open("r", encoding="utf-8") as f:
+                    first_line = f.readline().strip()
+                    if first_line:
+                        meta = json.loads(first_line)
+                        if meta.get("type") == "session_meta":
+                            sessions.append({
+                                "path": str(path),
+                                "session_id": meta.get("session_id", ""),
+                                "created_at": meta.get("created_at", 0),
+                                "message_count": meta.get("message_count", 0),
+                                "filename": path.name,
+                            })
+            except Exception:
+                continue
+
+        return sessions
+
+    @staticmethod
+    def format_session_time(timestamp: float) -> str:
+        """Format timestamp to human readable time."""
+        import time
+        if timestamp:
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
+        return "unknown"

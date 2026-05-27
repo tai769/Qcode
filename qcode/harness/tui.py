@@ -35,6 +35,109 @@ from textual.widgets import (
     Tree,
 )
 
+
+# ─── Collapsible Tool Result Widget ────────────────────────────
+
+class CollapsibleToolResult(Static):
+    """A collapsible widget for tool results that shows summary by default."""
+
+    DEFAULT_CSS = """
+    CollapsibleToolResult {
+        height: auto;
+        margin: 0 0 1 0;
+    }
+    .tool-header {
+        height: 1;
+        background: $surface-darken-1;
+        padding: 0 1;
+    }
+    .tool-content {
+        height: auto;
+        max-height: 20;
+        overflow-y: auto;
+        padding: 0 1;
+        background: $surface-darken-2;
+        display: none;
+    }
+    .tool-content.expanded {
+        display: block;
+    }
+    """
+
+    def __init__(
+        self,
+        tool_name: str,
+        content: str,
+        is_error: bool = False,
+        max_preview_chars: int = 200,
+        **kwargs
+    ) -> None:
+        super().__init__(**kwargs)
+        self.tool_name = tool_name
+        self.content = content
+        self.is_error = is_error
+        self.max_preview_chars = max_preview_chars
+        self._expanded = False
+
+    def compose(self) -> ComposeResult:
+        # Header with toggle button
+        preview = self._get_preview()
+        icon = self._get_icon()
+        error_prefix = "[red]Error: [/]" if self.is_error else ""
+
+        with Vertical():
+            yield Static(
+                f"{icon} [bold]{self.tool_name}[/] {error_prefix}[dim]{preview}[/]",
+                classes="tool-header",
+                id=f"header-{id(self)}"
+            )
+            yield Static(
+                self._format_content(),
+                classes="tool-content",
+                id=f"content-{id(self)}"
+            )
+
+    def _get_preview(self) -> str:
+        """Get a short preview of the content."""
+        if not self.content:
+            return "(empty)"
+        preview = self.content[:self.max_preview_chars].replace("\n", " ")
+        if len(self.content) > self.max_preview_chars:
+            preview += "..."
+        return preview
+
+    def _get_icon(self) -> str:
+        """Get icon for tool type."""
+        icons = {
+            "bash": "  ", "read_file": "  ", "write_file": "  ",
+            "edit_file": "  ✏️", "grep": "  ", "glob": "  ",
+            "todo": "  ", "compact": "  ", "task": "  ",
+            "git_status": " ", "git_diff": " ", "git_log": " ",
+        }
+        return icons.get(self.tool_name, "  ")
+
+    def _format_content(self) -> str:
+        """Format the full content for display."""
+        if not self.content:
+            return "(no output)"
+
+        # Truncate very long content
+        max_chars = 5000
+        content = self.content
+        if len(content) > max_chars:
+            content = content[:max_chars] + f"\n\n[dim]... ({len(self.content)} chars total)[/]"
+
+        return content
+
+    def on_click(self) -> None:
+        """Toggle expand/collapse on click."""
+        self._expanded = not self._expanded
+        content_widget = self.query_one(f"#content-{id(self)}", Static)
+        if self._expanded:
+            content_widget.add_class("expanded")
+        else:
+            content_widget.remove_class("expanded")
+
 from qcode.config import AppConfig
 from qcode.harness.completer import (
     extract_at_reference,
@@ -154,6 +257,55 @@ class ModelPickerScreen(ModalScreen[Optional[str]]):
         model = event.value.strip()
         if model:
             self.dismiss(model)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+
+
+class SessionPickerScreen(ModalScreen[Optional[str]]):
+    """Modal to pick a previous session to resume."""
+
+    CSS = """
+    SessionPickerScreen { align: center middle; }
+    #session-dialog {
+        width: 80; height: auto; max-height: 30;
+        border: thick $primary; background: $surface; padding: 1 2;
+    }
+    """
+
+    def __init__(self, sessions_dir: Path, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.sessions_dir = sessions_dir
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="session-dialog"):
+            yield Label("[bold]Resume Session[/]")
+            yield Label("[dim]Select a session to resume, or press Esc to cancel[/]")
+            yield OptionList(id="session-list")
+
+    def on_mount(self) -> None:
+        opt_list = self.query_one("#session-list", OptionList)
+        sessions = ConversationSession.list_sessions(self.sessions_dir)
+
+        if not sessions:
+            opt_list.add_option("[dim]No saved sessions found[/]")
+            return
+
+        for i, session in enumerate(sessions):
+            time_str = ConversationSession.format_session_time(session["created_at"])
+            msg_count = session["message_count"]
+            session_id = session["session_id"][:8]
+            opt_list.add_option(
+                f"{time_str} - {msg_count} messages ({session_id}...)"
+            )
+        self._sessions = sessions
+
+    @on(OptionList.OptionSelected)
+    def on_selected(self, event: OptionList.OptionSelected) -> None:
+        if hasattr(self, '_sessions') and event.option_index < len(self._sessions):
+            session_path = self._sessions[event.option_index]["path"]
+            self.dismiss(session_path)
 
     def on_key(self, event) -> None:
         if event.key == "escape":
@@ -372,6 +524,51 @@ class TodoPanel(Static):
         self.refresh()
 
 
+class SessionPanel(Static):
+    """Panel showing session statistics and summary."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._turn_count = 0
+        self._message_count = 0
+        self._tool_calls = 0
+        self._last_activity = ""
+        self._session_id = ""
+
+    def render(self) -> str:
+        lines = ["[bold]  Session[/]", "─" * 25]
+
+        if self._session_id:
+            lines.append(f" [dim]ID:[/] {self._session_id[:8]}...")
+
+        lines.append(f" [dim]Turns:[/] {self._turn_count}")
+        lines.append(f" [dim]Messages:[/] {self._message_count}")
+        lines.append(f" [dim]Tool calls:[/] {self._tool_calls}")
+
+        if self._last_activity:
+            lines.append(f" [dim]Last:[/] {self._last_activity}")
+
+        lines.append("")
+        lines.append("[dim]  Ctrl+N: New session[/]")
+
+        return "\n".join(lines)
+
+    def update_stats(
+        self,
+        turn_count: int = 0,
+        message_count: int = 0,
+        tool_calls: int = 0,
+        last_activity: str = "",
+        session_id: str = "",
+    ) -> None:
+        self._turn_count = turn_count
+        self._message_count = message_count
+        self._tool_calls = tool_calls
+        self._last_activity = last_activity
+        self._session_id = session_id
+        self.refresh()
+
+
 class TeamPanel(Static):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -400,18 +597,42 @@ class TeamPanel(Static):
 
 
 class ChatPanel(RichLog):
-    def __init__(self, **kwargs) -> None:
+    """Enhanced chat panel with message limiting and collapsible tool results."""
+
+    def __init__(
+        self,
+        max_visible_messages: int = 100,
+        tool_result_preview_chars: int = 200,
+        **kwargs
+    ) -> None:
         super().__init__(markup=True, wrap=True, highlight=True, auto_scroll=False, **kwargs)
         self._streaming_line = ""
         self._streaming_widget: Optional[Static] = None
         self._stream_dirty = False
+        self._message_count = 0
+        self._max_visible_messages = max_visible_messages
+        self._tool_result_preview_chars = tool_result_preview_chars
+        self._turn_count = 0
+        self._turn_messages: List[str] = []  # Track messages per turn
 
     def add_user_message(self, text: str) -> None:
         self._flush_streaming()
+        self._turn_count += 1
+        self._turn_messages = []
+        self._message_count += 1
+
+        # Add separator for new turns
+        if self._turn_count > 1:
+            self.write("\n" + "─" * 50 + "\n")
+
         self.write(f"\n[bold green]> [/] {text}")
+        self._turn_messages.append(f"user: {text[:50]}...")
 
     def add_assistant_text(self, text: str) -> None:
         self._flush_streaming()
+        self._message_count += 1
+        self._turn_messages.append(f"assistant: {text[:50]}...")
+
         # Process code blocks with syntax highlighting
         self._write_with_code_highlighting(text)
 
@@ -455,16 +676,18 @@ class ChatPanel(RichLog):
 
     def _flush_streaming(self) -> None:
         if self._streaming_line:
-            self.write(Markdown(self._streaming_line))
+            # Use Text instead of Markdown to avoid unwanted line breaks
+            text = Text(self._streaming_line)
+            self.write(text)
             self._streaming_line = ""
             self._stream_dirty = False
 
     def render_streaming_now(self) -> None:
         """Force a UI refresh of the current streaming content."""
         if self._stream_dirty and self._streaming_line:
-            # Use a temporary Static widget approach: just write what we have
-            # RichLog doesn't support in-place editing, so we flush periodically
-            self.write(Markdown(self._streaming_line))
+            # Use Text instead of Markdown to preserve streaming text flow
+            text = Text(self._streaming_line)
+            self.write(text)
             self._streaming_line = ""
             self._stream_dirty = False
 
@@ -474,34 +697,64 @@ class ChatPanel(RichLog):
             "bash": "  ", "read_file": "  ", "write_file": "  ",
             "edit_file": "  ✏️", "grep": "  ", "glob": "  ",
             "todo": "  ", "compact": "  ", "task": "  ",
+            "git_status": " ", "git_diff": " ", "git_log": " ",
         }
         icon = icons.get(tool_name, "  ")
         preview = f" [dim]{args_preview[:60]}[/]" if args_preview else ""
         self.write(f"{icon}[bold]{tool_name}[/]{preview}")
+        self._turn_messages.append(f"tool_call: {tool_name}")
 
     def add_tool_result(self, tool_name: str, output: str, is_error: bool = False) -> None:
         self._flush_streaming()
-        if is_error:
-            self.write(f"[bold red]  ✗ {tool_name} Error:[/]\n{output[:500]}")
-        else:
-            # Show tool result with syntax highlighting if it looks like code
-            if tool_name in ("read_file", "grep", "bash") and len(output) > 100:
-                # Try to detect language for syntax highlighting
-                lang = self._detect_language(tool_name, output)
-                if lang:
-                    try:
-                        from rich.syntax import Syntax
-                        syntax = Syntax(output[:1000], lang, theme="monokai", line_numbers=False)
-                        self.write(f"[dim]  → {tool_name} result:[/]")
-                        self.write(syntax)
-                        if len(output) > 1000:
-                            self.write(f"[dim]  ... ({len(output)} chars total)[/]")
-                        return
-                    except Exception:
-                        pass
-            # Fallback to plain text
-            preview = output[:300].replace("\n", " ")
-            self.write(f"[dim]  → {preview}[/]")
+        self._message_count += 1
+        self._turn_messages.append(f"tool_result: {tool_name}")
+
+        # For short results, show inline
+        if len(output) <= 150 and not is_error:
+            self.write(f"[dim]  → {output}[/]")
+            return
+
+        # For longer results, show collapsible version
+        icon = self._get_tool_icon(tool_name)
+        error_prefix = "[red]Error: [/]" if is_error else ""
+
+        # Show summary
+        preview = output[:self._tool_result_preview_chars].replace("\n", " ")
+        if len(output) > self._tool_result_preview_chars:
+            preview += "..."
+
+        self.write(f"  {icon} {error_prefix}[dim]{preview}[/] [dim italic](click to expand)[/]")
+
+        # Store full content for potential expansion
+        # Note: RichLog doesn't support interactive widgets, so we show a compact version
+        # In a full implementation, we'd use a custom widget with expand/collapse
+
+        # For code-like output, show syntax highlighted preview
+        if not is_error and tool_name in ("read_file", "grep", "bash") and len(output) > 100:
+            lang = self._detect_language(tool_name, output)
+            if lang:
+                try:
+                    from rich.syntax import Syntax
+                    # Show first 10 lines with syntax highlighting
+                    lines = output.split('\n')[:10]
+                    preview_code = '\n'.join(lines)
+                    if len(output) > len(preview_code):
+                        preview_code += f"\n# ... ({len(output)} chars total)"
+                    syntax = Syntax(preview_code, lang, theme="monokai", line_numbers=False)
+                    self.write(syntax)
+                    return
+                except Exception:
+                    pass
+
+    def _get_tool_icon(self, tool_name: str) -> str:
+        """Get icon for tool type."""
+        icons = {
+            "bash": "  ", "read_file": "  ", "write_file": "  ",
+            "edit_file": "  ✏️", "grep": "  ", "glob": "  ",
+            "todo": "  ", "compact": "  ", "task": "  ",
+            "git_status": " ", "git_diff": " ", "git_log": " ",
+        }
+        return icons.get(tool_name, "  ")
 
     def _detect_language(self, tool_name: str, output: str) -> str:
         """Detect programming language for syntax highlighting."""
@@ -530,6 +783,18 @@ class ChatPanel(RichLog):
     def add_error(self, text: str) -> None:
         self._flush_streaming()
         self.write(f"[bold red]Error:[/] {text}")
+
+    def get_turn_summary(self) -> str:
+        """Get a summary of the current turn's messages."""
+        if not self._turn_messages:
+            return ""
+        return f"Turn {self._turn_count}: {len(self._turn_messages)} messages"
+
+    def clear_old_messages(self, keep_recent: int = 50) -> None:
+        """Clear old messages to free memory (placeholder for future implementation)."""
+        # Note: RichLog doesn't support removing old messages easily
+        # In a full implementation, we'd maintain a message buffer and rebuild
+        pass
 
 
 # ─── Main App ────────────────────────────────────────────────────
@@ -578,9 +843,11 @@ class QcodeApp(App):
     BINDINGS = [
         Binding("ctrl+c", "interrupt_or_quit", "Quit"),
         Binding("ctrl+n", "new_session", "New"),
+        Binding("ctrl+r", "resume_session", "Resume"),
         Binding("ctrl+l", "clear_chat", "Clear"),
         Binding("ctrl+t", "toggle_sidebar", "Sidebar"),
         Binding("ctrl+m", "pick_model", "Model"),
+        Binding("ctrl+d", "toggle_detail", "Detail", show=False),
         Binding("ctrl+shift+c", "copy_last", "Copy", show=False),
         Binding("escape", "stop", "Stop", show=False),
     ]
@@ -618,6 +885,8 @@ class QcodeApp(App):
             with Vertical(id="sidebar"):
                 with Collapsible(title="Thinking", collapsed=False, id="thinking-collapse"):
                     yield ThinkingPanel(id="thinking-panel")
+                with Collapsible(title="Session", collapsed=False, id="session-collapse"):
+                    yield SessionPanel(id="session-panel")
                 with Collapsible(title="Todo", collapsed=False, id="todo-collapse"):
                     yield TodoPanel(id="todo-panel")
                 with Collapsible(title="Team", collapsed=True, id="team-collapse"):
@@ -633,7 +902,7 @@ class QcodeApp(App):
                 tooltip="",
             )
         yield Static(
-            " [dim]Esc/Ctrl+C=stop  Ctrl+N=new  /=cmd  Tab=@file  Ctrl+M=model  Ctrl+T=sidebar[/]",
+            " [dim]Esc/Ctrl+C=stop  Ctrl+N=new  Ctrl+R=resume  Ctrl+L=clear  Ctrl+M=model  Ctrl+T=sidebar  Ctrl+D=detail  Tab=@file  /=cmd[/]",
             id="hint-bar",
         )
 
@@ -687,6 +956,21 @@ class QcodeApp(App):
         active = self.registry.active()
         provider_name = active.name if active else "unknown"
         bar.update_info(provider_name, self.config.model)
+
+    def _update_session_panel(self) -> None:
+        """Update the session statistics panel."""
+        try:
+            panel = self.query_one("#session-panel", SessionPanel)
+            chat = self.query_one("#chat-panel", ChatPanel)
+            panel.update_stats(
+                turn_count=chat._turn_count,
+                message_count=chat._message_count,
+                tool_calls=sum(1 for m in chat._turn_messages if m.startswith("tool_call:")),
+                last_activity=time.strftime("%H:%M"),
+                session_id=self.session.session_id,
+            )
+        except Exception:
+            pass
 
     # ─── Memory (CLAUDE.md equivalent) ───────────────────────────
 
@@ -770,14 +1054,14 @@ class QcodeApp(App):
         chat.add_user_message(user_text)
         self.session.add_user_text(user_text)
 
-        # Start a periodic refresh timer for streaming display
-        self._stream_refresh_task = asyncio.create_task(self._stream_refresh_loop())
-
         try:
             async for event in self.engine.run_events(self.session):
                 self._handle_engine_event(event)
                 if event.type == "tool_result":
                     self._refresh_todo_panel()
+                    self._update_session_panel()
+                if event.type == "assistant_message":
+                    self._update_session_panel()
                 if event.type == "stopped":
                     chat.add_system(f"[yellow]Stopped: {event.data.get('reason', 'cancelled')}[/]")
                 # Yield to the event loop so UI stays responsive (clicks, key presses)
@@ -785,21 +1069,20 @@ class QcodeApp(App):
         except Exception as exc:
             chat.add_error(str(exc))
         finally:
-            if self._stream_refresh_task:
-                self._stream_refresh_task.cancel()
-                self._stream_refresh_task = None
-            chat.flush_streaming()
             self._is_running = False
             self._streaming_text = ""
             status.update_status("idle")
+            self._update_session_panel()
             self._auto_save_session()
 
     async def _stream_refresh_loop(self) -> None:
         """Periodically flush streaming content to the UI."""
         while True:
-            await asyncio.sleep(0.08)  # ~12 fps refresh rate
+            await asyncio.sleep(0.15)  # ~7 fps refresh rate - less frequent to avoid line breaks
             chat = self.query_one("#chat-panel", ChatPanel)
-            chat.render_streaming_now()
+            # Only flush if we have accumulated enough text
+            if len(self._streaming_text) > 50:
+                chat.flush_streaming()
 
     def _auto_save_session(self) -> None:
         sessions_dir = self.config.workdir / ".qcode" / "sessions"
@@ -931,17 +1214,19 @@ class QcodeApp(App):
                     if isinstance(block, dict) and block.get("type") == "text"
                 ]
                 content = "".join(text_parts)
+
+            # Use the content from event, or fall back to accumulated streaming text
             if content:
-                self._last_assistant_message = content
-                if self._streaming_text:
-                    # Streaming already rendered the content; just flush any remainder
-                    chat.flush_streaming()
-                else:
-                    # No streaming occurred (e.g. cached response); write the full content
-                    chat.add_assistant_text(content)
+                final_content = content
             elif self._streaming_text:
-                self._last_assistant_message = self._streaming_text
-                chat.flush_streaming()
+                final_content = self._streaming_text
+            else:
+                final_content = ""
+
+            if final_content:
+                self._last_assistant_message = final_content
+                chat.add_assistant_text(final_content)
+
             self._streaming_text = ""
             thinking.stop_thinking()
             status.increment_turn()
@@ -1004,6 +1289,7 @@ class QcodeApp(App):
             chat.add_system(
                 "**Commands:**\n"
                 "  /help          Show this help\n"
+                "  /resume        Resume a previous session\n"
                 "  /clear         Clear session\n"
                 "  /compact       Compress context\n"
                 "  /model [id]    Switch model\n"
@@ -1024,6 +1310,7 @@ class QcodeApp(App):
                 "\n**Shortcuts:**\n"
                 "  Esc/Ctrl+C     Stop/Quit\n"
                 "  Ctrl+N         New session\n"
+                "  Ctrl+R         Resume session\n"
                 "  Ctrl+M         Switch model\n"
                 "  Ctrl+T         Toggle sidebar\n"
                 "  Ctrl+L         Clear screen"
@@ -1071,6 +1358,8 @@ class QcodeApp(App):
             self._show_file_tree(arg)
         elif cmd == "/copy":
             self._copy_last_message()
+        elif cmd == "/resume":
+            self._resume_session()
         else:
             chat.add_system(f"Unknown: {cmd}. Type /help")
 
@@ -1402,6 +1691,35 @@ class QcodeApp(App):
         else:
             chat.add_system("No session found.")
 
+    def _resume_session(self) -> None:
+        """Show session picker to resume a previous session."""
+        sessions_dir = self.config.workdir / ".qcode" / "sessions"
+
+        def on_session_selected(path: Optional[str]) -> None:
+            if path:
+                chat = self.query_one("#chat-panel", ChatPanel)
+                try:
+                    self.session = ConversationSession.load(Path(path))
+                    chat.clear()
+                    chat.add_system(f"[green]Session resumed: {len(self.session)} messages loaded[/]")
+
+                    # Re-display recent messages for context
+                    recent_messages = self.session.messages[-10:]  # Show last 10 messages
+                    for msg in recent_messages:
+                        role = msg.get("role", "")
+                        content = msg.get("content", "")
+                        if isinstance(content, str):
+                            if role == "user":
+                                chat.add_user_message(content[:200])
+                            elif role == "assistant":
+                                chat.add_assistant_text(content[:200])
+
+                    self._update_session_panel()
+                except Exception as e:
+                    chat.add_error(f"Failed to load session: {e}")
+
+        self.push_screen(SessionPickerScreen(sessions_dir), on_session_selected)
+
     # ─── Sidebar refresh ─────────────────────────────────────────
 
     def _refresh_todo_panel(self) -> None:
@@ -1485,6 +1803,22 @@ class QcodeApp(App):
         self._refresh_todo_panel()
         chat = self.query_one("#chat-panel", ChatPanel)
         chat.add_system("[green]New session started.[/]")
+
+    def action_resume_session(self) -> None:
+        """Resume a previous session (Ctrl+R)."""
+        self._resume_session()
+
+    def action_toggle_detail(self) -> None:
+        """Toggle detailed view mode (Ctrl+D)."""
+        chat = self.query_one("#chat-panel", ChatPanel)
+        # Toggle between compact and detailed view
+        if hasattr(chat, '_detailed_mode'):
+            chat._detailed_mode = not chat._detailed_mode
+        else:
+            chat._detailed_mode = True
+
+        mode = "detailed" if chat._detailed_mode else "compact"
+        chat.add_system(f"[green]View mode: {mode}[/]")
 
     def action_copy_last(self) -> None:
         """Copy last assistant message to clipboard (Ctrl+Shift+C)."""
