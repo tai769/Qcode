@@ -629,11 +629,15 @@ class ChatPanel(RichLog):
         self._turn_messages.append(f"user: {text[:50]}...")
 
     def add_assistant_text(self, text: str) -> None:
-        self._flush_streaming()
+        # Clear any accumulated streaming text without writing it
+        # (we'll write the complete text below)
+        self._streaming_line = ""
+        self._stream_dirty = False
+
         self._message_count += 1
         self._turn_messages.append(f"assistant: {text[:50]}...")
 
-        # Process code blocks with syntax highlighting
+        # Write the complete text at once
         self._write_with_code_highlighting(text)
 
     def _write_with_code_highlighting(self, text: str) -> None:
