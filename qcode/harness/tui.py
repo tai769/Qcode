@@ -628,13 +628,15 @@ class TeamPanel(Static):
 
     def render(self) -> str:
         if not self._members:
-            return "[dim]  No teammates[/]"
+            return "[dim]  No teammates[/]\n[dim]  Use /team to setup[/]"
         lines = ["[bold]  Team[/]", "─" * 25]
         for m in self._members:
             name = m.get("name", "?")
             role = m.get("role", "?")
             status = m.get("status", "idle")
-            if status == "working":
+            if status == "active":
+                icon = "[green]●[/]"
+            elif status == "working":
                 icon = "[yellow]⚙[/]"
             elif status == "idle":
                 icon = "[dim]◌[/]"
@@ -1893,14 +1895,36 @@ class QcodeApp(App):
         team_dir = self.config.workdir / ".team"
         config_path = team_dir / "config.json"
         if not config_path.exists():
-            chat.add_system("No team configured.")
+            chat.add_system(
+                "**No team configured.**\n\n"
+                "To setup a team, create `.team/config.json`:\n\n"
+                "```json\n"
+                "{\n"
+                '  "team_name": "My Team",\n'
+                '  "members": [\n'
+                '    {"name": "alice", "role": "frontend"},\n'
+                '    {"name": "bob", "role": "backend"}\n'
+                "  ]\n"
+                "}\n"
+                "```\n\n"
+                "Or use `/team setup` to create a team interactively."
+            )
             return
         data = json.loads(config_path.read_text())
         members = data.get("members", [])
         lines = [f"**Team: {data.get('team_name', 'default')}**"]
+        lines.append("")
         for m in members:
+            name = m.get("name", "?")
+            role = m.get("role", "?")
             status = m.get("status", "idle")
-            lines.append(f"  {m['name']} ({m.get('role', '?')}): {status}")
+            if status == "active":
+                icon = "[green]●[/]"
+            elif status == "working":
+                icon = "[yellow]⚙[/]"
+            else:
+                icon = "[dim]◌[/]"
+            lines.append(f"  {icon} {name} ({role})")
         chat.add_assistant_text("\n".join(lines))
 
     def _show_tasks_in_chat(self) -> None:
@@ -1979,7 +2003,24 @@ class QcodeApp(App):
         config_path = team_dir / "config.json"
         if config_path.exists():
             data = json.loads(config_path.read_text())
-            panel.update_members(data.get("members", []))
+            members = data.get("members", [])
+            # Add active status based on recent activity
+            for member in members:
+                # Check if teammate has recent activity
+                teammate_dir = team_dir / "teammates" / member.get("name", "")
+                if teammate_dir.exists():
+                    # Check for recent files
+                    recent_files = list(teammate_dir.glob("*.md"))
+                    if recent_files:
+                        member["status"] = "active"
+                    else:
+                        member["status"] = "idle"
+                else:
+                    member["status"] = "idle"
+            panel.update_members(members)
+        else:
+            # Show setup instructions if no team configured
+            panel.update_members([])
 
     # ─── Permission ──────────────────────────────────────────────
 
