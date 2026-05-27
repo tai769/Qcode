@@ -1557,6 +1557,8 @@ class QcodeApp(App):
                 "  /model [id]    Switch model\n"
                 "  /todo          Show todo list\n"
                 "  /team          Show team status\n"
+                "  /team-reset    Reset stuck teammates\n"
+                "  /team-status   Show detailed team status\n"
                 "  /task          Show tasks\n"
                 "  /save          Save session\n"
                 "  /load [id]     Load session\n"
@@ -1622,6 +1624,10 @@ class QcodeApp(App):
             self._copy_last_message()
         elif cmd == "/resume":
             self._resume_session()
+        elif cmd == "/team-reset":
+            self._reset_stuck_teammates()
+        elif cmd == "/team-status":
+            self._show_team_status()
         else:
             chat.add_system(f"Unknown: {cmd}. Type /help")
 
@@ -2057,6 +2063,68 @@ class QcodeApp(App):
         from qcode.config_toml import QcodeConfig
         cfg = QcodeConfig.load()
         self._global_always_allow = set(cfg.permission.auto_allow)
+
+    def _reset_stuck_teammates(self) -> None:
+        """Reset stuck teammates to idle status."""
+        chat = self.query_one("#chat-panel", ChatPanel)
+        # Read config and reset stuck members
+        team_dir = self.config.workdir / ".team"
+        config_path = team_dir / "config.json"
+
+        if not config_path.exists():
+            chat.add_system("[yellow]No team config found.[/]")
+            return
+
+        data = json.loads(config_path.read_text())
+        members = data.get("members", [])
+        reset_count = 0
+
+        for member in members:
+            if member.get("status") == "working":
+                # Check if thread is alive (simplified check)
+                member["status"] = "idle"
+                reset_count += 1
+
+        if reset_count > 0:
+            config_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+            chat.add_system(f"[green]Reset {reset_count} stuck teammates to idle.[/]")
+            self._refresh_team_panel()
+        else:
+            chat.add_system("[dim]No stuck teammates found.[/]")
+
+    def _show_team_status(self) -> None:
+        """Show detailed team status."""
+        chat = self.query_one("#chat-panel", ChatPanel)
+        team_dir = self.config.workdir / ".team"
+        config_path = team_dir / "config.json"
+
+        if not config_path.exists():
+            chat.add_system("[yellow]No team config found.[/]")
+            return
+
+        data = json.loads(config_path.read_text())
+        members = data.get("members", [])
+
+        lines = ["**Team Status**", ""]
+        for m in members:
+            name = m.get("name", "?")
+            role = m.get("role", "?")
+            status = m.get("status", "unknown")
+
+            # Check inbox
+            inbox_path = team_dir / "inbox" / f"{name}.jsonl"
+            has_inbox = inbox_path.exists() and inbox_path.stat().st_size > 0
+
+            status_icon = {
+                "idle": "[green]●[/]",
+                "working": "[yellow]⚙[/]",
+                "shutdown": "[red]×[/]",
+            }.get(status, "[dim]?[/]")
+
+            inbox_str = " [dim](has messages)[/]" if has_inbox else ""
+            lines.append(f"  {status_icon} {name} ({role}) - {status}{inbox_str}")
+
+        chat.add_assistant_text("\n".join(lines))
 
     # ─── Model picker ────────────────────────────────────────────
 

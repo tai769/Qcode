@@ -297,6 +297,8 @@ class TeammateManager:
     def _teammate_loop(self, name: str) -> None:
         session = ConversationSession()
         idle_mode = "autonomous"
+        consecutive_failures = 0
+        max_consecutive_failures = 3
 
         while True:
             member = self.get_member(name)
@@ -324,24 +326,38 @@ class TeammateManager:
             engine = self.engine_factory(name, role)
             try:
                 engine.run(session, max_iterations=self.max_iterations)
+                consecutive_failures = 0  # Reset on success
             except RuntimeError as exc:
+                consecutive_failures += 1
                 self._emit_event(
                     "team.teammate.run_stopped",
                     {
                         "name": name,
                         "role": role,
                         "error": str(exc),
+                        "consecutive_failures": consecutive_failures,
                     },
                 )
+                # If too many failures, reset to idle
+                if consecutive_failures >= max_consecutive_failures:
+                    self._set_status(name, "idle")
+                    consecutive_failures = 0
             except Exception as exc:
+                consecutive_failures += 1
                 self._emit_event(
                     "team.teammate.failed",
                     {
                         "name": name,
                         "role": role,
                         "error": str(exc),
+                        "consecutive_failures": consecutive_failures,
                     },
                 )
+                # If too many failures, reset to idle
+                if consecutive_failures >= max_consecutive_failures:
+                    self._set_status(name, "idle")
+                    consecutive_failures = 0
+                    continue
                 break
 
             member = self.get_member(name)
@@ -555,3 +571,47 @@ class TeammateManager:
             self.event_sink.emit(event_type, payload)
         except Exception:
             return
+
+    def check_stuck_teammates(self) -> list[str]:
+        """Check for teammates that are stuck in 'working' state with no active thread."""
+        stuck = []
+        with self._config_lock:
+            for member in self._config["members"]:
+                name = member["name"]
+                status = member["status"]
+                if status == "working":
+                    thread = self._threads.get(name)
+                    if thread is None or not thread.is_alive():
+                        stuck.append(name)
+        return stuck
+
+    def reset_stuck_teammates(self) -> list[str]:
+        """Reset stuck teammates to idle status."""
+        stuck = self.check_stuck_teammates()
+        for name in stuck:
+            self._set_status(name, "idle")
+            self._emit_event(
+                "team.teammate.reset",
+                {
+                    "name": name,
+                    "reason": "stuck detection",
+                },
+            )
+        return stuck
+
+    def get_teammate_status(self, name: str) -> dict[str, object]:
+        """Get detailed status of a teammate."""
+        member = self.get_member(name)
+        if member is None:
+            return {"error": f"Unknown teammate '{name}'"}
+
+        thread = self._threads.get(name)
+        has_pending = self.bus.has_pending(name)
+
+        return {
+            "name": name,
+            "role": member.get("role", ""),
+            "status": member.get("status", "unknown"),
+            "thread_alive": thread.is_alive() if thread else False,
+            "has_pending_messages": has_pending,
+        }
