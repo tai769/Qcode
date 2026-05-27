@@ -1992,7 +1992,7 @@ class QcodeApp(App):
                     chat.add_system(f"[green]Session resumed: {len(self.session)} messages loaded[/]")
 
                     # Re-display recent messages for context (filter out reminders)
-                    recent_messages = self.session.messages[-10:]  # Show last 10 messages
+                    recent_messages = self.session.messages[-20:]  # Show last 20 messages
                     for msg in recent_messages:
                         role = msg.get("role", "")
                         content = msg.get("content", "")
@@ -2000,11 +2000,15 @@ class QcodeApp(App):
                             # Skip system reminders
                             if content.startswith("<reminder>") and content.endswith("</reminder>"):
                                 continue
+                            # Skip empty messages
+                            if not content.strip():
+                                continue
                             if role == "user":
-                                chat.add_user_message(content[:200])
+                                chat.add_user_message(content[:500])
                             elif role == "assistant":
-                                chat.add_assistant_text(content[:200])
+                                chat.add_assistant_text(content[:500])
 
+                    chat.add_system("[dim]You can continue the conversation from here.[/]")
                     self._update_session_panel()
                 except Exception as e:
                     chat.add_error(f"Failed to load session: {e}")
