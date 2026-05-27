@@ -1023,6 +1023,8 @@ class QcodeApp(App):
         Binding("ctrl+l", "clear_chat", "Clear"),
         Binding("ctrl+t", "toggle_sidebar", "Sidebar"),
         Binding("ctrl+m", "pick_model", "Model"),
+        Binding("ctrl+g", "show_team", "Team"),
+        Binding("ctrl+h", "show_help", "Help"),
         Binding("ctrl+d", "toggle_detail", "Detail", show=False),
         Binding("ctrl+shift+c", "copy_last", "Copy", show=False),
         Binding("escape", "stop", "Stop", show=False),
@@ -1080,7 +1082,7 @@ class QcodeApp(App):
                 tooltip="",
             )
         yield Static(
-            " [dim]Esc/Ctrl+C=stop  Ctrl+N=new  Ctrl+R=resume  Ctrl+L=clear  Ctrl+M=model  Ctrl+T=sidebar  Ctrl+D=detail  Tab=@file  /=cmd[/]",
+            " [dim]Esc/Ctrl+C=stop  Ctrl+N=new  Ctrl+R=resume  Ctrl+L=clear  Ctrl+M=model  Ctrl+T=sidebar  Ctrl+G=team  Ctrl+H=help  Tab=@file  /=cmd[/]",
             id="hint-bar",
         )
 
@@ -2108,6 +2110,36 @@ class QcodeApp(App):
 
         mode = "detailed" if chat._detailed_mode else "compact"
         chat.add_system(f"[green]View mode: {mode}[/]")
+
+    def action_show_team(self) -> None:
+        """Show team panel (Ctrl+G)."""
+        # Expand and focus the team panel in sidebar
+        sidebar = self.query_one("#sidebar")
+        team_collapse = self.query_one("#team-collapse", Collapsible)
+        team_collapse.collapsed = False
+        # Also show team info in chat
+        self._show_team_in_chat()
+
+    def action_show_help(self) -> None:
+        """Show keyboard shortcuts help (Ctrl+H)."""
+        chat = self.query_one("#chat-panel", ChatPanel)
+        chat.add_system(
+            "**Keyboard Shortcuts**\n\n"
+            "| Shortcut | Action |\n"
+            "|----------|--------|\n"
+            "| `Ctrl+C` | Stop/Quit |\n"
+            "| `Ctrl+N` | New session |\n"
+            "| `Ctrl+R` | Resume session |\n"
+            "| `Ctrl+L` | Clear chat |\n"
+            "| `Ctrl+T` | Toggle sidebar |\n"
+            "| `Ctrl+M` | Switch model |\n"
+            "| `Ctrl+G` | Show team |\n"
+            "| `Ctrl+H` | Show this help |\n"
+            "| `Ctrl+D` | Toggle detail mode |\n"
+            "| `Esc` | Stop current task |\n"
+            "| `Tab` | @file autocomplete |\n"
+            "| `/` | Command mode |"
+        )
 
     def action_copy_last(self) -> None:
         """Copy last assistant message to clipboard (Ctrl+Shift+C)."""
