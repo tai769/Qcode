@@ -569,6 +569,58 @@ class SessionPanel(Static):
         self.refresh()
 
 
+class ContextPanel(Static):
+    """Panel showing project context information."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._context_info: dict = {}
+
+    def render(self) -> str:
+        if not self._context_info:
+            return "[dim]  Loading context...[/]"
+
+        lines = ["[bold]  Context[/]", "─" * 25]
+
+        # Git branch
+        branch = self._context_info.get("git_branch", "")
+        if branch:
+            lines.append(f" [cyan] {branch}[/]")
+
+        # Git status
+        git_status = self._context_info.get("git_status", "")
+        if git_status:
+            if "clean" in git_status:
+                lines.append(f" [green]{git_status}[/]")
+            else:
+                lines.append(f" [yellow]{git_status}[/]")
+
+        # Recent files
+        recent_files = self._context_info.get("recent_files", [])
+        if recent_files:
+            lines.append("")
+            lines.append(" [dim]Recent files:[/]")
+            for f in recent_files[:3]:
+                # Shorten path
+                if len(f) > 25:
+                    f = "..." + f[-22:]
+                lines.append(f" [dim]  {f}[/]")
+
+        # Project structure
+        structure = self._context_info.get("project_structure", "")
+        if structure:
+            lines.append("")
+            lines.append(" [dim]Project:[/]")
+            for line in structure.split('\n')[:5]:
+                lines.append(f" [dim]{line}[/]")
+
+        return "\n".join(lines)
+
+    def update_context(self, context_info: dict) -> None:
+        self._context_info = context_info
+        self.refresh()
+
+
 class TeamPanel(Static):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -670,28 +722,53 @@ class ChatPanel(RichLog):
                     self.write(Markdown(part))
 
     def add_streaming_delta(self, text: str) -> None:
-        """Accumulate streaming text and schedule UI refresh."""
+        """Accumulate streaming text for typewriter effect."""
         self._streaming_line += text
         self._stream_dirty = True
 
     def flush_streaming(self) -> None:
-        """Flush accumulated streaming text as markdown."""
+        """Flush accumulated streaming text."""
         self._flush_streaming()
 
     def _flush_streaming(self) -> None:
         if self._streaming_line:
-            # Use Text instead of Markdown to avoid unwanted line breaks
-            text = Text(self._streaming_line)
-            self.write(text)
+            # Write complete text at once
+            self._write_streaming_text(self._streaming_line)
             self._streaming_line = ""
             self._stream_dirty = False
 
+    def _write_streaming_text(self, text: str) -> None:
+        """Write streaming text with proper formatting."""
+        # Process code blocks
+        import re
+        parts = re.split(r'(```[\s\S]*?```)', text)
+
+        for part in parts:
+            if part.startswith('```') and part.endswith('```'):
+                # Code block
+                lines = part[3:-3].split('\n', 1)
+                lang = lines[0].strip() if lines else ''
+                code = lines[1] if len(lines) > 1 else ''
+
+                if lang and code:
+                    try:
+                        from rich.syntax import Syntax
+                        syntax = Syntax(code, lang, theme="monokai", line_numbers=True)
+                        self.write(syntax)
+                    except Exception:
+                        self.write(f"[dim]```{lang}[/]\n{code}\n[dim]```[/]")
+                elif code:
+                    self.write(f"[dim]```[/]\n{code}\n[dim]```[/]")
+            else:
+                # Regular text - use Text to preserve formatting
+                if part.strip():
+                    self.write(Text(part))
+
     def render_streaming_now(self) -> None:
-        """Force a UI refresh of the current streaming content."""
+        """Render streaming text with typewriter effect."""
         if self._stream_dirty and self._streaming_line:
-            # Use Text instead of Markdown to preserve streaming text flow
-            text = Text(self._streaming_line)
-            self.write(text)
+            # Write accumulated text
+            self._write_streaming_text(self._streaming_line)
             self._streaming_line = ""
             self._stream_dirty = False
 
@@ -707,6 +784,8 @@ class ChatPanel(RichLog):
         preview = f" [dim]{args_preview[:60]}[/]" if args_preview else ""
         self.write(f"{icon}[bold]{tool_name}[/]{preview}")
         self._turn_messages.append(f"tool_call: {tool_name}")
+        self._current_tool = tool_name
+        self._current_tool_args = args_preview
 
     def add_tool_result(self, tool_name: str, output: str, is_error: bool = False) -> None:
         self._flush_streaming()
@@ -718,37 +797,128 @@ class ChatPanel(RichLog):
             self.write(f"[dim]  → {output}[/]")
             return
 
-        # For longer results, show collapsible version
+        # For longer results, show detailed version
         icon = self._get_tool_icon(tool_name)
         error_prefix = "[red]Error: [/]" if is_error else ""
 
-        # Show summary
-        preview = output[:self._tool_result_preview_chars].replace("\n", " ")
-        if len(output) > self._tool_result_preview_chars:
-            preview += "..."
+        # Show result summary with line count
+        lines = output.split('\n')
+        line_count = len(lines)
+        char_count = len(output)
 
-        self.write(f"  {icon} {error_prefix}[dim]{preview}[/] [dim italic](click to expand)[/]")
+        if is_error:
+            # Show error with red highlighting
+            self.write(f"  {icon} {error_prefix}")
+            self.write(f"[red]{output[:500]}[/]")
+            if len(output) > 500:
+                self.write(f"[dim]... ({char_count} chars total)[/]")
+        elif tool_name == "read_file":
+            # Show file content with line numbers
+            self.write(f"  {icon} [dim]{line_count} lines, {char_count} chars[/]")
+            self._show_file_content(output)
+        elif tool_name == "bash":
+            # Show command output
+            self.write(f"  {icon} [dim]{line_count} lines, {char_count} chars[/]")
+            self._show_command_output(output)
+        elif tool_name in ("grep", "glob"):
+            # Show search results
+            self.write(f"  {icon} [dim]{line_count} results[/]")
+            self._show_search_results(output, tool_name)
+        else:
+            # Show generic result
+            preview = output[:self._tool_result_preview_chars].replace("\n", " ")
+            if len(output) > self._tool_result_preview_chars:
+                preview += "..."
+            self.write(f"  {icon} {error_prefix}[dim]{preview}[/]")
 
-        # Store full content for potential expansion
-        # Note: RichLog doesn't support interactive widgets, so we show a compact version
-        # In a full implementation, we'd use a custom widget with expand/collapse
+    def _show_file_content(self, content: str) -> None:
+        """Show file content with syntax highlighting."""
+        lines = content.split('\n')
+        # Show first 20 lines with syntax highlighting
+        preview_lines = lines[:20]
+        preview_content = '\n'.join(preview_lines)
 
-        # For code-like output, show syntax highlighted preview
-        if not is_error and tool_name in ("read_file", "grep", "bash") and len(output) > 100:
-            lang = self._detect_language(tool_name, output)
-            if lang:
-                try:
-                    from rich.syntax import Syntax
-                    # Show first 10 lines with syntax highlighting
-                    lines = output.split('\n')[:10]
-                    preview_code = '\n'.join(lines)
-                    if len(output) > len(preview_code):
-                        preview_code += f"\n# ... ({len(output)} chars total)"
-                    syntax = Syntax(preview_code, lang, theme="monokai", line_numbers=False)
-                    self.write(syntax)
-                    return
-                except Exception:
-                    pass
+        if len(lines) > 20:
+            preview_content += f"\n# ... ({len(lines)} lines total)"
+
+        try:
+            from rich.syntax import Syntax
+            # Try to detect language from content
+            lang = self._detect_language_from_content(content)
+            syntax = Syntax(preview_content, lang, theme="monokai", line_numbers=True)
+            self.write(syntax)
+        except Exception:
+            # Fallback to plain text
+            for i, line in enumerate(preview_lines[:10], 1):
+                self.write(f"[dim]{i:3}[/] {line}")
+            if len(lines) > 10:
+                self.write(f"[dim]... ({len(lines)} lines total)[/]")
+
+    def _show_command_output(self, content: str) -> None:
+        """Show command output with syntax highlighting."""
+        lines = content.split('\n')
+        # Show first 30 lines
+        preview_lines = lines[:30]
+        preview_content = '\n'.join(preview_lines)
+
+        if len(lines) > 30:
+            preview_content += f"\n# ... ({len(lines)} lines total)"
+
+        try:
+            from rich.syntax import Syntax
+            syntax = Syntax(preview_content, "bash", theme="monokai", line_numbers=False)
+            self.write(syntax)
+        except Exception:
+            # Fallback to plain text
+            for line in preview_lines[:15]:
+                self.write(f"[dim]  {line}[/]")
+            if len(lines) > 15:
+                self.write(f"[dim]... ({len(lines)} lines total)[/]")
+
+    def _show_search_results(self, content: str, tool_name: str) -> None:
+        """Show search results with highlighting."""
+        lines = content.split('\n')
+        # Show first 20 results
+        preview_lines = lines[:20]
+
+        for line in preview_lines:
+            # Highlight matches
+            if ':' in line:
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    file_path, match = parts
+                    # Highlight file path
+                    self.write(f"[cyan]{file_path}[/]:{match}")
+                    continue
+            self.write(f"[dim]  {line}[/]")
+
+        if len(lines) > 20:
+            self.write(f"[dim]... ({len(lines)} results total)[/]")
+
+    def _detect_language_from_content(self, content: str) -> str:
+        """Detect programming language from file content."""
+        # Simple heuristics
+        if content.strip().startswith('#!'):
+            if 'python' in content[:100]:
+                return 'python'
+            if 'bash' in content[:100] or 'sh' in content[:100]:
+                return 'bash'
+            if 'node' in content[:100]:
+                return 'javascript'
+
+        # Check for common patterns
+        if 'def ' in content and ':' in content:
+            return 'python'
+        if 'function ' in content and '{' in content:
+            return 'javascript'
+        if 'class ' in content and '{' in content:
+            return 'java'
+        if '#include' in content:
+            return 'c'
+        if 'import ' in content and 'from ' in content:
+            return 'python'
+
+        return 'text'
 
     def _get_tool_icon(self, tool_name: str) -> str:
         """Get icon for tool type."""
@@ -889,6 +1059,8 @@ class QcodeApp(App):
             with Vertical(id="sidebar"):
                 with Collapsible(title="Thinking", collapsed=False, id="thinking-collapse"):
                     yield ThinkingPanel(id="thinking-panel")
+                with Collapsible(title="Context", collapsed=False, id="context-collapse"):
+                    yield ContextPanel(id="context-panel")
                 with Collapsible(title="Session", collapsed=False, id="session-collapse"):
                     yield SessionPanel(id="session-panel")
                 with Collapsible(title="Todo", collapsed=False, id="todo-collapse"):
@@ -916,6 +1088,7 @@ class QcodeApp(App):
         self._refresh_todo_panel()
         self._refresh_team_panel()
         self._refresh_git_panel_async()
+        self._refresh_context_panel_async()
         self._load_memory()
 
     def _refresh_git_panel(self) -> None:
@@ -952,6 +1125,92 @@ class QcodeApp(App):
     def _refresh_git_panel_async(self) -> None:
         """Non-blocking git panel refresh."""
         self._refresh_git_panel()
+
+    def _refresh_context_panel(self) -> None:
+        """Refresh context panel with project information."""
+        try:
+            panel = self.query_one("#context-panel", ContextPanel)
+            context_info = self._gather_context_info()
+            panel.update_context(context_info)
+        except Exception:
+            pass
+
+    def _gather_context_info(self) -> dict:
+        """Gather project context information."""
+        import subprocess
+        from pathlib import Path
+
+        info = {
+            "git_branch": "",
+            "git_status": "",
+            "recent_files": [],
+            "project_structure": "",
+            "current_dir": str(self.config.workdir),
+        }
+
+        # Git branch
+        try:
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True, text=True, cwd=self.config.workdir
+            ).stdout.strip()
+            info["git_branch"] = branch
+        except Exception:
+            pass
+
+        # Git status
+        try:
+            status = subprocess.run(
+                ["git", "status", "--short"],
+                capture_output=True, text=True, cwd=self.config.workdir
+            ).stdout.strip()
+            if status:
+                lines = status.split('\n')
+                info["git_status"] = f"{len(lines)} files changed"
+            else:
+                info["git_status"] = "clean"
+        except Exception:
+            pass
+
+        # Recent files (from git log)
+        try:
+            recent = subprocess.run(
+                ["git", "log", "--oneline", "-5", "--name-only"],
+                capture_output=True, text=True, cwd=self.config.workdir
+            ).stdout.strip()
+            if recent:
+                files = []
+                for line in recent.split('\n'):
+                    if line and not line.startswith(' '):
+                        # This is a commit message line
+                        continue
+                    if line.strip() and '.' in line:
+                        files.append(line.strip())
+                info["recent_files"] = files[:5]
+        except Exception:
+            pass
+
+        # Project structure (top-level)
+        try:
+            workdir = Path(self.config.workdir)
+            items = []
+            for item in sorted(workdir.iterdir()):
+                if item.name.startswith('.'):
+                    continue
+                if item.is_dir():
+                    items.append(f"  {item.name}/")
+                else:
+                    items.append(f"  {item.name}")
+            info["project_structure"] = '\n'.join(items[:15])
+        except Exception:
+            pass
+
+        return info
+
+    @work(thread=True)
+    def _refresh_context_panel_async(self) -> None:
+        """Non-blocking context panel refresh."""
+        self._refresh_context_panel()
 
     # ─── Status bar ──────────────────────────────────────────────
 
@@ -1058,6 +1317,9 @@ class QcodeApp(App):
         chat.add_user_message(user_text)
         self.session.add_user_text(user_text)
 
+        # Start streaming refresh task for typewriter effect
+        self._stream_refresh_task = asyncio.create_task(self._stream_refresh_loop())
+
         try:
             async for event in self.engine.run_events(self.session):
                 self._handle_engine_event(event)
@@ -1073,6 +1335,13 @@ class QcodeApp(App):
         except Exception as exc:
             chat.add_error(str(exc))
         finally:
+            # Cancel streaming refresh task
+            if self._stream_refresh_task:
+                self._stream_refresh_task.cancel()
+                self._stream_refresh_task = None
+            # Flush any remaining streaming text
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.flush_streaming()
             self._is_running = False
             self._streaming_text = ""
             status.update_status("idle")
@@ -1080,13 +1349,16 @@ class QcodeApp(App):
             self._auto_save_session()
 
     async def _stream_refresh_loop(self) -> None:
-        """Periodically flush streaming content to the UI."""
+        """Periodically flush streaming content for typewriter effect."""
         while True:
-            await asyncio.sleep(0.15)  # ~7 fps refresh rate - less frequent to avoid line breaks
-            chat = self.query_one("#chat-panel", ChatPanel)
-            # Only flush if we have accumulated enough text
-            if len(self._streaming_text) > 50:
-                chat.flush_streaming()
+            await asyncio.sleep(0.05)  # ~20 fps for smooth typewriter effect
+            try:
+                chat = self.query_one("#chat-panel", ChatPanel)
+                # Flush if we have any streaming text
+                if self._streaming_text:
+                    chat.render_streaming_now()
+            except Exception:
+                pass
 
     def _auto_save_session(self) -> None:
         sessions_dir = self.config.workdir / ".qcode" / "sessions"
