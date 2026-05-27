@@ -160,7 +160,7 @@ class ConversationSession:
 
     @staticmethod
     def list_sessions(sessions_dir: Path, limit: int = 10) -> list[dict]:
-        """List recent sessions with metadata."""
+        """List recent sessions with metadata and content preview."""
         if not sessions_dir.exists():
             return []
 
@@ -174,12 +174,37 @@ class ConversationSession:
                     if first_line:
                         meta = json.loads(first_line)
                         if meta.get("type") == "session_meta":
+                            # Read messages to get preview
+                            messages = []
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                try:
+                                    msg = json.loads(line)
+                                    if msg.get("role") in ("user", "assistant"):
+                                        messages.append(msg)
+                                except json.JSONDecodeError:
+                                    continue
+
+                            # Get first user message as preview
+                            preview = ""
+                            for msg in messages:
+                                if msg.get("role") == "user":
+                                    content = msg.get("content", "")
+                                    if isinstance(content, str) and content:
+                                        preview = content[:100]
+                                        if len(content) > 100:
+                                            preview += "..."
+                                        break
+
                             sessions.append({
                                 "path": str(path),
                                 "session_id": meta.get("session_id", ""),
                                 "created_at": meta.get("created_at", 0),
                                 "message_count": meta.get("message_count", 0),
                                 "filename": path.name,
+                                "preview": preview,
                             })
             except Exception:
                 continue

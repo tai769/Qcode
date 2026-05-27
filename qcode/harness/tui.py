@@ -296,9 +296,17 @@ class SessionPickerScreen(ModalScreen[Optional[str]]):
             time_str = ConversationSession.format_session_time(session["created_at"])
             msg_count = session["message_count"]
             session_id = session["session_id"][:8]
-            opt_list.add_option(
-                f"{time_str} - {msg_count} messages ({session_id}...)"
-            )
+            preview = session.get("preview", "")
+
+            # Format the option with preview
+            if preview:
+                opt_list.add_option(
+                    f"{time_str} | {msg_count} msgs | {preview}"
+                )
+            else:
+                opt_list.add_option(
+                    f"{time_str} | {msg_count} msgs | (no preview)"
+                )
         self._sessions = sessions
 
     @on(OptionList.OptionSelected)
