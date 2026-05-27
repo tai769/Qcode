@@ -362,6 +362,8 @@ def build_teammate_tool_definitions(
         reason: str = "",
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
+        if protocol_manager is None:
+            return "Error: Protocol manager not available in this mode"
         try:
             record = protocol_manager.get(request_id)
         except ValueError as exc:
@@ -405,6 +407,14 @@ def build_teammate_tool_definitions(
         plan: str,
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
+        if protocol_manager is None:
+            # Fallback: just send message to lead
+            return team_manager.send_message(
+                sender,
+                team_manager.lead_name,
+                f"Plan for approval:\n{plan}",
+                msg_type="message",
+            )
         record = protocol_manager.create_request(
             kind="plan_approval",
             requester=sender,
@@ -445,6 +455,8 @@ def build_teammate_tool_definitions(
         task_id: int,
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
+        if task_graph is None:
+            return "Error: Task graph not available in this mode"
         member = team_manager.get_member(sender)
         if member is None:
             return f"Error: Unknown teammate '{sender}'"
@@ -454,6 +466,8 @@ def build_teammate_tool_definitions(
     def get_goal(
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
+        if goal_store is None:
+            return "(no goal store available)"
         goal = goal_store.get()
         return goal or "(no active goal)"
 
