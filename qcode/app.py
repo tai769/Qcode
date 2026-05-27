@@ -419,7 +419,7 @@ def build_verification_loop_manager(
 
 
 def build_engine_for_tui(config: AppConfig, *, resume: bool = False) -> AgentEngine:
-    """Build a lightweight engine for TUI mode (no team, no background).
+    """Build engine for TUI mode with team support.
 
     When *resume* is False (the default), the goal store is in-memory only
     so each conversation starts completely fresh — matching Claude Code's
@@ -430,6 +430,9 @@ def build_engine_for_tui(config: AppConfig, *, resume: bool = False) -> AgentEng
     from qcode.runtime.compaction_middleware import CompactionMiddleware
     from qcode.runtime.context_budgeter import ContextBudgeter, estimate_text_tokens
     from qcode.tools.builtin_tools import build_builtin_tool_registry
+    from qcode.tools.team_tools import build_lead_team_tool_definitions
+    from qcode.runtime.team import MessageBus, TeammateManager
+    from qcode.runtime.team_middleware import TeamInboxMiddleware
 
     # Load project memory (CLAUDE.md equivalent) — always OK, it's project context
     memory_content = _load_project_memory(config.workdir)
@@ -440,9 +443,49 @@ def build_engine_for_tui(config: AppConfig, *, resume: bool = False) -> AgentEng
     if custom_instructions:
         system_prompt += f"\n\n{custom_instructions}"
     provider = build_chat_provider(config, system_prompt)
-    tool_registry = build_builtin_tool_registry(
+
+    # Build base tool registry
+    base_tool_registry = build_builtin_tool_registry(
         config.workdir,
         shell_timeout=config.shell_timeout,
+    )
+
+    # Build team components
+    team_dir = config.team_dir or (config.workdir / ".team")
+    inbox_dir = team_dir / "inbox"
+    message_bus = MessageBus(inbox_dir)
+
+    # Build team manager with a simple engine factory
+    def build_teammate_engine(name: str, role: str) -> AgentEngine:
+        teammate_prompt = build_teammate_system_prompt(config.workdir, name, role)
+        teammate_provider = build_chat_provider(config, teammate_prompt)
+        teammate_tools = build_builtin_tool_registry(
+            config.workdir,
+            shell_timeout=config.shell_timeout,
+        )
+        return AgentEngine(
+            teammate_provider,
+            teammate_tools,
+        )
+
+    team_manager = TeammateManager(
+        team_dir=team_dir,
+        bus=message_bus,
+        task_graph=None,  # No task graph in TUI mode
+        engine_factory=build_teammate_engine,
+    )
+
+    # Build tool registry with team tools
+    tool_registry = ToolRegistry(
+        [
+            *base_tool_registry.tool_definitions(),
+            *build_lead_team_tool_definitions(
+                team_manager,
+                None,  # No protocol manager in TUI mode
+                None,  # No goal store for team in TUI mode
+                lead_name=team_manager.lead_name,
+            ),
+        ]
     )
 
     transcript_dir = config.transcript_dir or (config.workdir / ".transcripts")
@@ -466,6 +509,7 @@ def build_engine_for_tui(config: AppConfig, *, resume: bool = False) -> AgentEng
         GoalMiddleware(goal_store),
         CompactionMiddleware(compactor, budgeter),
         TodoReminderMiddleware(config.todo_reminder_interval),
+        TeamInboxMiddleware(message_bus, team_manager.lead_name),
     ])
 
     return AgentEngine(

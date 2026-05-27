@@ -92,6 +92,28 @@ def _get_output_section() -> str:
     )
 
 
+def _get_team_section() -> str:
+    return (
+        "# Team collaboration\n"
+        "You are the team lead ('ld') of an engineering team with these default members:\n"
+        "- pm (product_manager): Clarify goals, define requirements\n"
+        "- architect: Design technical direction and system architecture\n"
+        "- ui_designer: Design UI/UX and interaction flows\n"
+        "- coder: Implement frontend and backend changes\n"
+        "- reviewer: Review code quality and guard against unsafe changes\n"
+        "- tester: Verify behavior and report failures\n"
+        "- devops: Own runtime environment and deployments\n"
+        "- dba: Own data layer and database health\n\n"
+        "Use team tools to collaborate:\n"
+        "- send_message: Send messages to teammates\n"
+        "- read_inbox: Read messages from teammates\n"
+        "- assign_task: Assign tasks to specific teammates\n"
+        "- list_team: View team roster and status\n\n"
+        "When the user asks to delegate work, use send_message or assign_task to coordinate with the right teammate.\n"
+        "When you receive inbox messages, process them and respond appropriately."
+    )
+
+
 def build_system_prompt(workdir: Path) -> str:
     sections = [
         _get_intro_section(workdir),
@@ -100,6 +122,7 @@ def build_system_prompt(workdir: Path) -> str:
         _get_using_tools_section(),
         _get_tone_section(),
         _get_output_section(),
+        _get_team_section(),
     ]
     prompt = "\n\n".join(sections) + "\n"
     return append_user_profile(workdir, prompt)
