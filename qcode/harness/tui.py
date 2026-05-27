@@ -1317,9 +1317,6 @@ class QcodeApp(App):
         chat.add_user_message(user_text)
         self.session.add_user_text(user_text)
 
-        # Start streaming refresh task for typewriter effect
-        self._stream_refresh_task = asyncio.create_task(self._stream_refresh_loop())
-
         try:
             async for event in self.engine.run_events(self.session):
                 self._handle_engine_event(event)
@@ -1335,30 +1332,11 @@ class QcodeApp(App):
         except Exception as exc:
             chat.add_error(str(exc))
         finally:
-            # Cancel streaming refresh task
-            if self._stream_refresh_task:
-                self._stream_refresh_task.cancel()
-                self._stream_refresh_task = None
-            # Flush any remaining streaming text
-            chat = self.query_one("#chat-panel", ChatPanel)
-            chat.flush_streaming()
             self._is_running = False
             self._streaming_text = ""
             status.update_status("idle")
             self._update_session_panel()
             self._auto_save_session()
-
-    async def _stream_refresh_loop(self) -> None:
-        """Periodically flush streaming content for typewriter effect."""
-        while True:
-            await asyncio.sleep(0.05)  # ~20 fps for smooth typewriter effect
-            try:
-                chat = self.query_one("#chat-panel", ChatPanel)
-                # Flush if we have any streaming text
-                if self._streaming_text:
-                    chat.render_streaming_now()
-            except Exception:
-                pass
 
     def _auto_save_session(self) -> None:
         sessions_dir = self.config.workdir / ".qcode" / "sessions"
@@ -1491,17 +1469,11 @@ class QcodeApp(App):
                 ]
                 content = "".join(text_parts)
 
-            # Use the content from event, or fall back to accumulated streaming text
+            # Only use content from event, not accumulated streaming text
+            # (streaming text was already displayed via text_delta events)
             if content:
-                final_content = content
-            elif self._streaming_text:
-                final_content = self._streaming_text
-            else:
-                final_content = ""
-
-            if final_content:
-                self._last_assistant_message = final_content
-                chat.add_assistant_text(final_content)
+                self._last_assistant_message = content
+                chat.add_assistant_text(content)
 
             self._streaming_text = ""
             thinking.stop_thinking()
