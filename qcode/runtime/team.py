@@ -431,6 +431,19 @@ class TeammateManager:
                         },
                     )
                 if consecutive_failures >= max_consecutive_failures:
+                    # Try checkpoint recovery before giving up
+                    checkpoint = self.load_checkpoint(name)
+                    if checkpoint and len(checkpoint) > len(session):
+                        self._log_activity(name, "recovering_from_checkpoint")
+                        session.replace_messages(checkpoint.messages)
+                        consecutive_failures = 0
+                        continue
+                    # Notify lead that teammate is stuck
+                    self.bus.send(
+                        name, self.lead_name,
+                        f"I'm stuck after {consecutive_failures} failures. Last error: {str(exc)[:200]}. Please review and provide guidance.",
+                        msg_type="message",
+                    )
                     self._set_status(name, "idle")
                     consecutive_failures = 0
                     continue
