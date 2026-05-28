@@ -2093,7 +2093,8 @@ class QcodeApp(App):
             chat.add_system("[dim]No stuck teammates found.[/]")
 
     def _show_team_status(self) -> None:
-        """Show detailed team status."""
+        """Show detailed team status with diagnostics."""
+        import time
         chat = self.query_one("#chat-panel", ChatPanel)
         team_dir = self.config.workdir / ".team"
         config_path = team_dir / "config.json"
@@ -2106,6 +2107,8 @@ class QcodeApp(App):
         members = data.get("members", [])
 
         lines = ["**Team Status**", ""]
+        now = time.time()
+
         for m in members:
             name = m.get("name", "?")
             role = m.get("role", "?")
@@ -2115,15 +2118,52 @@ class QcodeApp(App):
             inbox_path = team_dir / "inbox" / f"{name}.jsonl"
             has_inbox = inbox_path.exists() and inbox_path.stat().st_size > 0
 
+            # Check last activity
+            last_activity_str = ""
+            if inbox_path.exists():
+                mtime = inbox_path.stat().st_mtime
+                elapsed = now - mtime
+                if elapsed < 60:
+                    last_activity_str = f"[dim]({int(elapsed)}s ago)[/]"
+                elif elapsed < 3600:
+                    last_activity_str = f"[dim]({int(elapsed/60)}m ago)[/]"
+                else:
+                    last_activity_str = f"[dim]({int(elapsed/3600)}h ago)[/]"
+
+            # Check if lead has reply from this teammate
+            lead_inbox = team_dir / "inbox" / "ld.jsonl"
+            has_reply = False
+            if lead_inbox.exists():
+                try:
+                    content = lead_inbox.read_text(encoding="utf-8")
+                    if f'"from": "{name}"' in content:
+                        has_reply = True
+                except Exception:
+                    pass
+
             status_icon = {
                 "idle": "[green]●[/]",
                 "working": "[yellow]⚙[/]",
                 "shutdown": "[red]×[/]",
             }.get(status, "[dim]?[/]")
 
-            inbox_str = " [dim](has messages)[/]" if has_inbox else ""
-            lines.append(f"  {status_icon} {name} ({role}) - {status}{inbox_str}")
+            # Diagnostics
+            diagnostics = []
+            if status == "working":
+                if has_reply:
+                    diagnostics.append("[green]replied[/]")
+                elif has_inbox:
+                    diagnostics.append("[yellow]processing[/]")
+                else:
+                    diagnostics.append("[red]no activity[/]")
+            elif has_inbox:
+                diagnostics.append("[yellow]pending[/]")
 
+            diag_str = f" [{', '.join(diagnostics)}]" if diagnostics else ""
+            lines.append(f"  {status_icon} {name} ({role}) - {status}{last_activity_str}{diag_str}")
+
+        lines.append("")
+        lines.append("[dim]Use /team-reset to reset stuck teammates[/]")
         chat.add_assistant_text("\n".join(lines))
 
     # ─── Model picker ────────────────────────────────────────────

@@ -572,22 +572,42 @@ class TeammateManager:
         except Exception:
             return
 
-    def check_stuck_teammates(self) -> list[str]:
-        """Check for teammates that are stuck in 'working' state with no active thread."""
+    def check_stuck_teammates(self, timeout_seconds: float = 30.0) -> list[str]:
+        """Check for teammates that are stuck in 'working' state.
+
+        A teammate is considered stuck if:
+        1. Status is 'working' AND
+        2. Thread is not alive OR no activity for timeout_seconds
+        """
+        import time
         stuck = []
+        now = time.time()
+
         with self._config_lock:
             for member in self._config["members"]:
                 name = member["name"]
                 status = member["status"]
                 if status == "working":
                     thread = self._threads.get(name)
+                    # Check if thread is dead
                     if thread is None or not thread.is_alive():
                         stuck.append(name)
+                        continue
+
+                    # Check if teammate has been working too long without output
+                    # Check inbox for recent activity
+                    inbox_path = self.dir / "inbox" / f"{name}.jsonl"
+                    if inbox_path.exists():
+                        mtime = inbox_path.stat().st_mtime
+                        if now - mtime > timeout_seconds:
+                            # No activity for too long
+                            stuck.append(name)
+
         return stuck
 
-    def reset_stuck_teammates(self) -> list[str]:
+    def reset_stuck_teammates(self, timeout_seconds: float = 30.0) -> list[str]:
         """Reset stuck teammates to idle status."""
-        stuck = self.check_stuck_teammates()
+        stuck = self.check_stuck_teammates(timeout_seconds)
         for name in stuck:
             self._set_status(name, "idle")
             self._emit_event(
@@ -601,6 +621,7 @@ class TeammateManager:
 
     def get_teammate_status(self, name: str) -> dict[str, object]:
         """Get detailed status of a teammate."""
+        import time
         member = self.get_member(name)
         if member is None:
             return {"error": f"Unknown teammate '{name}'"}
@@ -608,10 +629,30 @@ class TeammateManager:
         thread = self._threads.get(name)
         has_pending = self.bus.has_pending(name)
 
+        # Check last activity
+        inbox_path = self.dir / "inbox" / f"{name}.jsonl"
+        last_activity = None
+        if inbox_path.exists():
+            mtime = inbox_path.stat().st_mtime
+            last_activity = time.time() - mtime
+
+        # Check if lead has pending messages from this teammate
+        lead_inbox_path = self.dir / "inbox" / f"{self.lead_name}.jsonl"
+        has_reply = False
+        if lead_inbox_path.exists():
+            try:
+                content = lead_inbox_path.read_text(encoding="utf-8")
+                if f'"from": "{name}"' in content:
+                    has_reply = True
+            except Exception:
+                pass
+
         return {
             "name": name,
             "role": member.get("role", ""),
             "status": member.get("status", "unknown"),
             "thread_alive": thread.is_alive() if thread else False,
             "has_pending_messages": has_pending,
+            "last_activity_seconds": last_activity,
+            "has_reply_to_lead": has_reply,
         }
