@@ -286,7 +286,20 @@ class SessionPickerScreen(ModalScreen[Optional[str]]):
 
     def on_mount(self) -> None:
         opt_list = self.query_one("#session-list", OptionList)
-        sessions = ConversationSession.list_sessions(self.sessions_dir)
+        opt_list.add_option("[dim]Loading sessions...[/]")
+        self._sessions = []
+        self._load_sessions_async()
+
+    @work(exclusive=True)
+    async def _load_sessions_async(self) -> None:
+        import asyncio
+        opt_list = self.query_one("#session-list", OptionList)
+        # Run file I/O in thread to avoid blocking UI
+        loop = asyncio.get_event_loop()
+        sessions = await loop.run_in_executor(
+            None, ConversationSession.list_sessions, self.sessions_dir
+        )
+        opt_list.clear_options()
 
         if not sessions:
             opt_list.add_option("[dim]No saved sessions found[/]")
@@ -298,7 +311,6 @@ class SessionPickerScreen(ModalScreen[Optional[str]]):
             session_id = session["session_id"][:8]
             preview = session.get("preview", "")
 
-            # Format the option with preview
             if preview:
                 opt_list.add_option(
                     f"{time_str} | {msg_count} msgs | {preview}"
@@ -1063,6 +1075,7 @@ class QcodeApp(App):
         self._stream_refresh_task: Optional[asyncio.Task] = None
         self._reasoning_shown = False
         self._last_assistant_message: str = ""
+        self._auto_triggered = False  # Prevent infinite auto-trigger loop
         self._load_global_permissions()
 
     def compose(self) -> ComposeResult:
@@ -1104,6 +1117,8 @@ class QcodeApp(App):
         self._load_memory()
         # Start periodic refresh for team panel
         self.set_interval(5.0, self._refresh_team_panel)
+        # Periodic inbox check — detect teammate replies when user is idle
+        self.set_interval(3.0, self._periodic_inbox_check)
 
     def _refresh_git_panel(self) -> None:
         """Refresh git status in the sidebar (blocking, use _refresh_git_panel_async)."""
@@ -1281,6 +1296,7 @@ class QcodeApp(App):
         # Handle Escape explicitly — stop running agent or blur input
         if event.key == "escape":
             if self._is_running:
+                self.session.mark_interrupted()
                 self.engine.request_cancel()
             else:
                 # Blur the input so focus returns to the app
@@ -1317,10 +1333,11 @@ class QcodeApp(App):
     # ─── Agent execution ─────────────────────────────────────────
 
     @work(exclusive=True)
-    async def _run_agent(self, user_text: str) -> None:
+    async def _run_agent(self, user_text: str, *, auto_triggered: bool = False) -> None:
         if self._is_running:
             return
         self._is_running = True
+        self._auto_triggered = auto_triggered
         self._streaming_text = ""
         self._reasoning_shown = False
         status = self.query_one("#status-bar", StatusBar)
@@ -1328,7 +1345,8 @@ class QcodeApp(App):
         chat = self.query_one("#chat-panel", ChatPanel)
         thinking = self.query_one("#thinking-panel", ThinkingPanel)
         thinking.clear()
-        chat.add_user_message(user_text)
+        if not auto_triggered:
+            chat.add_user_message(user_text)
         self.session.add_user_text(user_text)
 
         try:
@@ -1341,7 +1359,6 @@ class QcodeApp(App):
                     self._update_session_panel()
                 if event.type == "stopped":
                     chat.add_system(f"[yellow]Stopped: {event.data.get('reason', 'cancelled')}[/]")
-                # Yield to the event loop so UI stays responsive (clicks, key presses)
                 await asyncio.sleep(0)
         except Exception as exc:
             chat.add_error(str(exc))
@@ -1351,10 +1368,46 @@ class QcodeApp(App):
             status.update_status("idle")
             self._update_session_panel()
             self._auto_save_session()
+            # After run completes, check if teammates have replies waiting
+            if not auto_triggered:
+                self._check_inbox_after_run()
 
     def _auto_save_session(self) -> None:
         sessions_dir = self.config.workdir / ".qcode" / "sessions"
         self.session.save(sessions_dir)
+
+    def _has_inbox_messages(self) -> bool:
+        """Check if lead's inbox has pending messages (non-destructive)."""
+        team_dir = self.config.workdir / ".team"
+        inbox_path = team_dir / "inbox" / "ld.jsonl"
+        if not inbox_path.exists():
+            return False
+        try:
+            return inbox_path.stat().st_size > 0
+        except OSError:
+            return False
+
+    def _check_inbox_after_run(self) -> None:
+        """After agent run completes, check inbox and auto-trigger if teammates replied."""
+        if self._has_inbox_messages():
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.add_system("[cyan]Team inbox has new messages, processing...[/]")
+            self._run_agent(
+                "Check your inbox for teammate replies and respond to the user.",
+                auto_triggered=True,
+            )
+
+    def _periodic_inbox_check(self) -> None:
+        """Periodic check: if idle and inbox has messages, auto-trigger."""
+        if self._is_running:
+            return
+        if self._has_inbox_messages():
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.add_system("[cyan]Teammate reply received, processing...[/]")
+            self._run_agent(
+                "Check your inbox for teammate replies and respond to the user.",
+                auto_triggered=True,
+            )
 
     def _get_tool_status_text(self, tool_name: str, args: str) -> str:
         """Generate human-readable status text for tool calls."""

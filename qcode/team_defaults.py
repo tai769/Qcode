@@ -63,7 +63,8 @@ ROLE_GUIDANCE = {
     ),
     "product_manager": (
         "Clarify goals, define requirements and acceptance criteria, and keep the work"
-        " aligned with product intent."
+        " aligned with product intent. Write a clear PRD with user stories, features,"
+        " acceptance criteria, and constraints. Present to lead for user approval."
     ),
     "researcher": (
         "Research market trends, competitor products, and industry best practices. "
@@ -73,15 +74,19 @@ ROLE_GUIDANCE = {
     ),
     "architect": (
         "Design technical direction, system boundaries, interfaces, and refactor plans"
-        " before major implementation starts."
+        " before major implementation starts. When coder reports issues:"
+        " small bugs → decide directly and tell coder the fix;"
+        " big issues → propose 2-3 solutions with trade-offs for user to decide."
     ),
     "ui_designer": (
         "Design product interaction flows, information architecture, page layouts,"
         " visual hierarchy, and implementation-ready UI specifications for frontend work."
     ),
     "coder": (
-        "Implement frontend and backend changes, keep code runnable, and update durable"
-        " task state as work progresses."
+        "Implement frontend and backend changes following the approved architecture."
+        " NEVER start coding without approved architecture."
+        " First explore the project structure, then submit execution plan,"
+        " wait for approval, then implement. Report issues to architect."
     ),
     "code_reviewer": (
         "Review coder output, guard code quality, communicate findings clearly back to"

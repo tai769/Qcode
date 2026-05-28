@@ -27,6 +27,7 @@ class ConversationSession:
         self._last_response_id: Optional[str] = None
         self._cumulative_input_tokens: int = 0
         self.created_at: float = time.time()
+        self._interrupted_at: Optional[float] = None
         self._recompute_last_response_id()
 
     @property
@@ -80,6 +81,14 @@ class ConversationSession:
         mode = self._idle_poll_mode
         self._idle_poll_mode = None
         return mode
+
+    def mark_interrupted(self) -> None:
+        self._interrupted_at = time.time()
+
+    def is_message_stale(self, message_time: float) -> bool:
+        if self._interrupted_at is None:
+            return False
+        return message_time < self._interrupted_at
 
     @property
     def last_response_id(self) -> Optional[str]:

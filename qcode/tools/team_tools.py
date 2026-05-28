@@ -39,6 +39,16 @@ def build_lead_team_tool_definitions(
         msg_type: str = "message",
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
+        # Validate recipient name
+        if to != resolved_lead_name:
+            member = team_manager.get_member(to)
+            if member is None:
+                known = team_manager.member_names()
+                # Suggest closest match
+                import difflib
+                close = difflib.get_close_matches(to, known, n=1, cutoff=0.4)
+                hint = f" Did you mean '{close[0]}'?" if close else ""
+                return f"Error: Unknown teammate '{to}'.{hint} Known: {', '.join(known)}"
         return team_manager.send_message(resolved_lead_name, to, content, msg_type)
 
     def read_inbox(
@@ -61,6 +71,17 @@ def build_lead_team_tool_definitions(
         member = team_manager.get_member(teammate)
         if member is None:
             return f"Error: Unknown teammate '{teammate}'"
+
+        if protocol_manager is None:
+            # TUI mode: just mark shutdown directly
+            team_manager.mark_shutdown(teammate)
+            team_manager.send_message(
+                resolved_lead_name,
+                teammate,
+                reason,
+                msg_type="shutdown_request",
+            )
+            return f"Teammate '{teammate}' marked as shutdown"
 
         record = protocol_manager.create_request(
             kind="shutdown",
@@ -86,6 +107,8 @@ def build_lead_team_tool_definitions(
         request_id: str,
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
+        if protocol_manager is None:
+            return "Error: Protocol manager not available in TUI mode"
         try:
             record = protocol_manager.get(request_id)
         except ValueError as exc:
@@ -97,6 +120,8 @@ def build_lead_team_tool_definitions(
         status: str = "",
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
+        if protocol_manager is None:
+            return "[]"
         records = protocol_manager.list_requests(kind=kind or None, status=status or None)
         return json.dumps(records, indent=2, ensure_ascii=False)
 
@@ -106,6 +131,9 @@ def build_lead_team_tool_definitions(
         feedback: str = "",
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
+        if protocol_manager is None:
+            return "Error: Protocol manager not available in TUI mode. Use send_message to reply to the teammate directly."
+
         try:
             record = protocol_manager.get(request_id)
         except ValueError as exc:
@@ -162,7 +190,22 @@ def build_lead_team_tool_definitions(
         goal_store.clear()
         return "Active goal cleared."
 
-    return [
+    def check_teammate(
+        name: str,
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        status = team_manager.get_teammate_status(name)
+        return json.dumps(status, indent=2, ensure_ascii=False)
+
+    def reset_stuck_teammates(
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        stuck = team_manager.reset_stuck_teammates(timeout_seconds=30.0)
+        if not stuck:
+            return "No stuck teammates detected."
+        return f"Reset {len(stuck)} stuck teammates: {', '.join(stuck)}"
+
+    definitions = [
         ToolDefinition(
             name="spawn_teammate",
             description="Spawn or wake a persistent teammate that works in its own thread.",
@@ -332,7 +375,33 @@ def build_lead_team_tool_definitions(
             },
             handler=clear_goal,
         ),
+        ToolDefinition(
+            name="check_teammate",
+            description="Check if a teammate is alive, stuck, or idle. Shows detailed status including thread state and last activity.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Teammate name to check",
+                    },
+                },
+                "required": ["name"],
+            },
+            handler=check_teammate,
+        ),
+        ToolDefinition(
+            name="reset_stuck_teammates",
+            description="Detect and reset teammates that appear stuck (working but no activity for 30s).",
+            parameters={
+                "type": "object",
+                "properties": {},
+            },
+            handler=reset_stuck_teammates,
+        ),
     ]
+
+    return definitions
 
 
 def build_teammate_tool_definitions(
@@ -348,6 +417,15 @@ def build_teammate_tool_definitions(
         msg_type: str = "message",
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
+        # Validate recipient name
+        if to != team_manager.lead_name:
+            member = team_manager.get_member(to)
+            if member is None:
+                known = [team_manager.lead_name] + team_manager.member_names()
+                import difflib
+                close = difflib.get_close_matches(to, known, n=1, cutoff=0.4)
+                hint = f" Did you mean '{close[0]}'?" if close else ""
+                return f"Error: Unknown recipient '{to}'.{hint} Known: {', '.join(known)}"
         return team_manager.send_message(sender, to, content, msg_type)
 
     def read_inbox(

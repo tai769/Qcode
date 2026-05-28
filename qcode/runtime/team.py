@@ -168,6 +168,7 @@ class TeammateManager:
         self.event_sink = event_sink or NullEventSink()
         self._config_lock = threading.Lock()
         self._threads: Dict[str, threading.Thread] = {}
+        self._heartbeat: Dict[str, Dict[str, object]] = {}  # name -> {ts, phase, detail}
         self._load_or_create_config()
 
     def spawn(self, name: str, role: str, prompt: str) -> str:
@@ -299,6 +300,7 @@ class TeammateManager:
         idle_mode = "autonomous"
         consecutive_failures = 0
         max_consecutive_failures = 3
+        run_timeout = 120.0  # Hard timeout for a single engine run
 
         while True:
             member = self.get_member(name)
@@ -323,42 +325,100 @@ class TeammateManager:
 
             self._set_status(name, "working")
             self._ensure_identity_context(session, name, role)
+            self._update_heartbeat(name, "starting_engine")
             engine = self.engine_factory(name, role)
-            try:
-                engine.run(session, max_iterations=self.max_iterations)
-                consecutive_failures = 0  # Reset on success
-            except RuntimeError as exc:
-                consecutive_failures += 1
-                self._emit_event(
-                    "team.teammate.run_stopped",
-                    {
-                        "name": name,
-                        "role": role,
-                        "error": str(exc),
-                        "consecutive_failures": consecutive_failures,
-                    },
+
+            # Run engine in a worker thread
+            exc_holder: list[Optional[BaseException]] = [None]
+            def _run_engine() -> None:
+                try:
+                    engine.run(
+                        session,
+                        max_iterations=self.max_iterations,
+                        timeout_seconds=run_timeout - 10,
+                    )
+                except BaseException as exc:
+                    exc_holder[0] = exc
+
+            worker = threading.Thread(target=_run_engine, daemon=True)
+            worker.start()
+
+            # Watchdog: poll every 5s, force-cancel after run_timeout
+            cancel_sent = False
+            deadline = time.monotonic() + run_timeout
+            while worker.is_alive():
+                elapsed = run_timeout - (deadline - time.monotonic()) if not cancel_sent else 0
+                self._update_heartbeat(
+                    name, "running",
+                    f"elapsed={elapsed:.0f}s" + (" (cancelling)" if cancel_sent else ""),
                 )
-                # If too many failures, reset to idle
+                worker.join(timeout=5.0)
+                if not worker.is_alive():
+                    break
+                if time.monotonic() > deadline and not cancel_sent:
+                    self._emit_event(
+                        "team.teammate.hard_timeout",
+                        {
+                            "name": name,
+                            "role": role,
+                            "timeout_seconds": run_timeout,
+                        },
+                    )
+                    self._update_heartbeat(name, "timeout_cancel", f"after {run_timeout:.0f}s")
+                    # Force-cancel: close HTTP connection via provider
+                    engine.request_cancel()
+                    cancel_sent = True
+                    # Give 15 more seconds for cancel to take effect
+                    deadline = time.monotonic() + 15.0
+                elif cancel_sent and time.monotonic() > deadline:
+                    # Still stuck after cancel — abandon this run
+                    self._emit_event(
+                        "team.teammate.force_killed",
+                        {"name": name, "role": role},
+                    )
+                    self._update_heartbeat(name, "force_killed")
+                    break
+
+            exc = exc_holder[0]
+            if worker.is_alive():
+                # Thread still alive after all timeouts — mark failure
+                consecutive_failures += 1
+                self._set_status(name, "idle")
                 if consecutive_failures >= max_consecutive_failures:
-                    self._set_status(name, "idle")
                     consecutive_failures = 0
-            except Exception as exc:
+                continue
+
+            if exc is not None:
                 consecutive_failures += 1
-                self._emit_event(
-                    "team.teammate.failed",
-                    {
-                        "name": name,
-                        "role": role,
-                        "error": str(exc),
-                        "consecutive_failures": consecutive_failures,
-                    },
-                )
-                # If too many failures, reset to idle
+                self._update_heartbeat(name, "error", str(exc)[:100])
+                if isinstance(exc, RuntimeError):
+                    self._emit_event(
+                        "team.teammate.run_stopped",
+                        {
+                            "name": name,
+                            "role": role,
+                            "error": str(exc),
+                            "consecutive_failures": consecutive_failures,
+                        },
+                    )
+                else:
+                    self._emit_event(
+                        "team.teammate.failed",
+                        {
+                            "name": name,
+                            "role": role,
+                            "error": str(exc),
+                            "consecutive_failures": consecutive_failures,
+                        },
+                    )
                 if consecutive_failures >= max_consecutive_failures:
                     self._set_status(name, "idle")
                     consecutive_failures = 0
                     continue
                 break
+            else:
+                consecutive_failures = 0
+                self._update_heartbeat(name, "completed")
 
             member = self.get_member(name)
             if member is None or member["status"] == "shutdown":
@@ -510,11 +570,11 @@ class TeammateManager:
         self._reset_working_on_startup()
 
     def _reset_working_on_startup(self) -> None:
-        """Reset all 'working' teammates to 'idle' on startup."""
+        """Reset all non-idle teammates to 'idle' on startup."""
         with self._config_lock:
             changed = False
             for member in self._config.get("members", []):
-                if member.get("status") == "working":
+                if member.get("status") != "idle":
                     member["status"] = "idle"
                     changed = True
             if changed:
@@ -586,6 +646,13 @@ class TeammateManager:
             self.event_sink.emit(event_type, payload)
         except Exception:
             return
+
+    def _update_heartbeat(self, name: str, phase: str, detail: str = "") -> None:
+        self._heartbeat[name] = {
+            "ts": time.time(),
+            "phase": phase,
+            "detail": detail,
+        }
 
     def check_stuck_teammates(self, timeout_seconds: float = 30.0) -> list[str]:
         """Check for teammates that are stuck in 'working' state.
@@ -670,4 +737,5 @@ class TeammateManager:
             "has_pending_messages": has_pending,
             "last_activity_seconds": last_activity,
             "has_reply_to_lead": has_reply,
+            "heartbeat": self._heartbeat.get(name),
         }

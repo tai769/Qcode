@@ -4,14 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qcode"
-version = "0.1.0"
-description = "AI coding assistant"
+version = "0.2.0"
+description = "AI coding agent with team collaboration"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
     "rich>=13.0",
     "textual>=0.40",
+    "textual-autocomplete>=0.1.0",
+    "requests>=2.28",
+    "fastapi>=0.100",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
 ]
 
 [project.scripts]

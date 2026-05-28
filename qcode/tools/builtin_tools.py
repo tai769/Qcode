@@ -84,12 +84,26 @@ def build_builtin_tool_registry(
         return workspace.replace_text(path, old_text, new_text)
 
     def todo(
-        items: list[dict[str, object]],
+        items: list[dict[str, object]] = None,
+        todos=None,
         context: Optional[ToolExecutionContext] = None,
     ) -> str:
         if context is None:
             return "Error: Todo tool requires session context"
-        return context.session.todo_manager.update(items)
+        # Accept 'todos' as alias for 'items' (common model mistake)
+        raw = items if items is not None else todos
+        if raw is None:
+            return "Error: Missing required argument 'items' for tool 'todo'"
+        # Handle string input (model sometimes stringifies the array)
+        if isinstance(raw, str):
+            import json as _json
+            try:
+                raw = _json.loads(raw)
+            except _json.JSONDecodeError:
+                return "Error: 'items' must be a JSON array, got invalid string"
+        if not isinstance(raw, list):
+            return f"Error: 'items' must be a JSON array, got {type(raw).__name__}"
+        return context.session.todo_manager.update(raw)
 
     def compact(
         focus: str = "general continuity",
@@ -513,13 +527,13 @@ def build_builtin_tool_registry(
         ),
         build_tool(
             name="todo",
-            description="Update the structured task list. Use it for multi-step tasks and keep at most one item in_progress.",
+            description="Update the structured task list. Use it for multi-step tasks and keep at most one item in_progress. IMPORTANT: use 'items' parameter (array of objects with id, text, status).",
             parameters={
                 "type": "object",
                 "properties": {
                     "items": {
                         "type": "array",
-                        "description": "Ordered todo items for the current task.",
+                        "description": "Ordered todo items for the current task. Each item has id (string), text (string), status (pending/in_progress/completed).",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -529,7 +543,10 @@ def build_builtin_tool_registry(
                             },
                             "required": ["id", "text", "status"],
                         },
-                    }
+                    },
+                    "todos": {
+                        "description": "Alias for 'items'. Use 'items' instead.",
+                    },
                 },
                 "required": ["items"],
             },

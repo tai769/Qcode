@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
@@ -21,6 +22,12 @@ from qcode.runtime.tool_executor import (
 )
 from qcode.telemetry.events import EventSink, NullEventSink
 from qcode.tools.registry import ToolRegistry
+
+
+# Tools that are "no-op" when they return empty results
+_NOOP_TOOLS = {"read_inbox"}
+_MAX_CONSECUTIVE_NOOPS = 5
+_DEFAULT_RUN_TIMEOUT_SECONDS = 120.0
 
 
 ResponseEventHandler = Callable[[ResponseEvent], None]
@@ -92,9 +99,13 @@ class AgentEngine:
         self,
         session: ConversationSession,
         max_iterations: Optional[int] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> None:
         run_context = AgentRunContext(session=session)
         iteration_count = 0
+        consecutive_noops = 0
+        run_start = time.monotonic()
+        effective_timeout = timeout_seconds or _DEFAULT_RUN_TIMEOUT_SECONDS
 
         self._emit_event(
             "run.started",
@@ -105,6 +116,29 @@ class AgentEngine:
         )
 
         while True:
+            # Check cancellation
+            if self._cancel_requested:
+                self._emit_event(
+                    "run.cancelled",
+                    {"session_id": session.session_id},
+                )
+                raise RuntimeError("Run cancelled by request")
+
+            # Wall-clock timeout
+            elapsed = time.monotonic() - run_start
+            if elapsed > effective_timeout:
+                self._emit_event(
+                    "run.timeout",
+                    {
+                        "session_id": session.session_id,
+                        "elapsed_seconds": round(elapsed, 1),
+                        "timeout_seconds": effective_timeout,
+                    },
+                )
+                raise RuntimeError(
+                    f"Run timed out after {elapsed:.0f}s (limit: {effective_timeout:.0f}s)"
+                )
+
             if max_iterations is not None and iteration_count >= max_iterations:
                 self._emit_event(
                     "run.max_iterations_reached",
@@ -175,6 +209,25 @@ class AgentEngine:
             )
             session.extend(tool_result.messages)
 
+            # Detect consecutive no-op tool calls (e.g., empty read_inbox)
+            turn_was_noop = self._check_noop_turn(result.message["tool_calls"], tool_result)
+            if turn_was_noop:
+                consecutive_noops += 1
+            else:
+                consecutive_noops = 0
+            if consecutive_noops >= _MAX_CONSECUTIVE_NOOPS:
+                self._emit_event(
+                    "run.stuck_detected",
+                    {
+                        "session_id": session.session_id,
+                        "consecutive_noops": consecutive_noops,
+                    },
+                )
+                raise RuntimeError(
+                    f"Stuck: {consecutive_noops} consecutive no-op tool calls "
+                    f"(e.g., empty read_inbox). Teammate should use idle()."
+                )
+
             if tool_result.used_todo:
                 run_context.rounds_since_todo = 0
                 run_context.todo_reminder_emitted_at_round = None
@@ -200,6 +253,29 @@ class AgentEngine:
                     },
                 )
                 return
+
+    def _check_noop_turn(
+        self,
+        tool_calls: list[dict],
+        tool_result: ToolExecutionResult,
+    ) -> bool:
+        """Check if all tool calls in this turn were no-ops (empty results)."""
+        if not tool_calls:
+            return False
+        results = tool_result.messages
+        for tc, msg in zip(tool_calls, results):
+            fn_name = tc.get("function", {}).get("name", "")
+            if fn_name not in _NOOP_TOOLS:
+                return False
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                # read_inbox returns "[]" when empty
+                stripped = content.strip()
+                if stripped and stripped != "[]":
+                    return False
+            else:
+                return False
+        return True
 
     async def run_events(
         self,
