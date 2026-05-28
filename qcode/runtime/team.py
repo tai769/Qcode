@@ -169,6 +169,8 @@ class TeammateManager:
         self._config_lock = threading.Lock()
         self._threads: Dict[str, threading.Thread] = {}
         self._heartbeat: Dict[str, Dict[str, object]] = {}  # name -> {ts, phase, detail}
+        self._activity_log: Dict[str, List[Dict[str, object]]] = {}  # name -> [{ts, action, detail}]
+        self._max_activity_entries = 20
         self._load_or_create_config()
 
     def spawn(self, name: str, role: str, prompt: str) -> str:
@@ -327,6 +329,21 @@ class TeammateManager:
             self._ensure_identity_context(session, name, role)
             self._update_heartbeat(name, "starting_engine")
             engine = self.engine_factory(name, role)
+
+            # Log tool calls to activity feed
+            def _on_response_event(event):
+                if hasattr(event, 'tool_call') and event.tool_call:
+                    tc = event.tool_call
+                    fn_name = tc.get("function", {}).get("name", "") if isinstance(tc, dict) else getattr(tc, 'name', '')
+                    if fn_name:
+                        self._log_activity(name, "tool_call", fn_name)
+                elif hasattr(event, 'event_type'):
+                    et = str(event.event_type)
+                    if 'TEXT' in et:
+                        pass  # Skip text deltas to reduce noise
+                    elif 'DONE' in et or 'CREATED' in et:
+                        self._log_activity(name, "model_response", et)
+            engine.set_response_event_handler(_on_response_event)
 
             # Run engine in a worker thread
             exc_holder: list[Optional[BaseException]] = [None]
@@ -653,6 +670,16 @@ class TeammateManager:
             "phase": phase,
             "detail": detail,
         }
+        self._log_activity(name, phase, detail)
+
+    def _log_activity(self, name: str, action: str, detail: str = "") -> None:
+        if name not in self._activity_log:
+            self._activity_log[name] = []
+        log = self._activity_log[name]
+        log.append({"ts": time.time(), "action": action, "detail": detail[:200]})
+        # Keep only last N entries
+        if len(log) > self._max_activity_entries:
+            self._activity_log[name] = log[-self._max_activity_entries:]
 
     def check_stuck_teammates(self, timeout_seconds: float = 30.0) -> list[str]:
         """Check for teammates that are stuck in 'working' state.
@@ -729,6 +756,9 @@ class TeammateManager:
             except Exception:
                 pass
 
+        # Get recent activity (last 5 entries)
+        activity = self._activity_log.get(name, [])[-5:]
+
         return {
             "name": name,
             "role": member.get("role", ""),
@@ -738,4 +768,5 @@ class TeammateManager:
             "last_activity_seconds": last_activity,
             "has_reply_to_lead": has_reply,
             "heartbeat": self._heartbeat.get(name),
+            "recent_activity": activity,
         }
