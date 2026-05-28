@@ -50,7 +50,7 @@ class AppConfig:
     model_verbosity: str = ""
     disable_response_storage: bool = False
     request_timeout: int = 60
-    shell_timeout: int = 120
+    shell_timeout: int = 30
     tool_output_preview_chars: int = 200
     todo_reminder_interval: int = 3
     subagent_max_iterations: int = 30
@@ -98,7 +98,7 @@ class AppConfig:
             ),
             max_tokens=int(os.getenv("QCODE_MAX_TOKENS", "8000")),
             request_timeout=int(os.getenv("QCODE_REQUEST_TIMEOUT", "60")),
-            shell_timeout=int(os.getenv("QCODE_SHELL_TIMEOUT", "120")),
+            shell_timeout=int(os.getenv("QCODE_SHELL_TIMEOUT", "30")),
             tool_output_preview_chars=int(
                 os.getenv("QCODE_TOOL_OUTPUT_PREVIEW_CHARS", "200")
             ),

@@ -14,6 +14,7 @@ DANGEROUS_PATTERNS = (
     "reboot",
     "> /dev/",
     "mkfs",
+    "pkill -f",  # Can hang matching broad patterns; use kill PID instead
 )
 
 
