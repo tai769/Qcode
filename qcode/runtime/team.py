@@ -505,6 +505,21 @@ class TeammateManager:
                 }
                 self._save_config_unlocked()
 
+        # Reset all 'working' teammates to 'idle' on startup
+        # This prevents stuck teammates from previous sessions
+        self._reset_working_on_startup()
+
+    def _reset_working_on_startup(self) -> None:
+        """Reset all 'working' teammates to 'idle' on startup."""
+        with self._config_lock:
+            changed = False
+            for member in self._config.get("members", []):
+                if member.get("status") == "working":
+                    member["status"] = "idle"
+                    changed = True
+            if changed:
+                self._save_config_unlocked()
+
     def _merge_default_members_unlocked(self) -> bool:
         changed = False
         members = self._config.get("members")
