@@ -401,6 +401,58 @@ def build_lead_team_tool_definitions(
         ),
     ]
 
+    # Workflow gate tools
+    def approve_plan(
+        name: str,
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        member = team_manager.get_member(name)
+        if member is None:
+            return f"Error: Unknown teammate '{name}'"
+        team_manager.approve_plan(name)
+        return f"Plan approved for '{name}'. They can now write code."
+
+    def check_plan_status(
+        name: str,
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        approved = team_manager.is_plan_approved(name)
+        status = "approved" if approved else "not approved"
+        return f"Plan status for '{name}': {status}"
+
+    definitions.extend([
+        ToolDefinition(
+            name="approve_plan",
+            description="Approve a teammate's execution plan so they can start coding. REQUIRED before coder can write files.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Teammate name whose plan to approve",
+                    },
+                },
+                "required": ["name"],
+            },
+            handler=approve_plan,
+        ),
+        ToolDefinition(
+            name="check_plan_status",
+            description="Check if a teammate's plan has been approved.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Teammate name",
+                    },
+                },
+                "required": ["name"],
+            },
+            handler=check_plan_status,
+        ),
+    ])
+
     return definitions
 
 
@@ -549,7 +601,7 @@ def build_teammate_tool_definitions(
         goal = goal_store.get()
         return goal or "(no active goal)"
 
-    return [
+    definitions = [
         ToolDefinition(
             name="send_message",
             description="Send a message to the lead or another teammate.",
@@ -645,3 +697,27 @@ def build_teammate_tool_definitions(
             handler=get_goal,
         ),
     ]
+
+    # Add plan status check for coders
+    def check_plan_status(
+        context: Optional[ToolExecutionContext] = None,
+    ) -> str:
+        approved = team_manager.is_plan_approved(sender)
+        if approved:
+            return "Plan is APPROVED. You may write code files."
+        else:
+            return "Plan is NOT approved yet. Submit your plan via request_plan_approval and wait for the lead to call approve_plan."
+
+    definitions.append(
+        ToolDefinition(
+            name="check_plan_status",
+            description="Check if your execution plan has been approved by the lead. You MUST check this before writing any code files.",
+            parameters={
+                "type": "object",
+                "properties": {},
+            },
+            handler=check_plan_status,
+        ),
+    )
+
+    return definitions

@@ -28,6 +28,7 @@ class ConversationSession:
         self._cumulative_input_tokens: int = 0
         self.created_at: float = time.time()
         self._interrupted_at: Optional[float] = None
+        self._plan_approved: bool = False
         self._recompute_last_response_id()
 
     @property

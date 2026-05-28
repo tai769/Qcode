@@ -171,6 +171,8 @@ class TeammateManager:
         self._heartbeat: Dict[str, Dict[str, object]] = {}  # name -> {ts, phase, detail}
         self._activity_log: Dict[str, List[Dict[str, object]]] = {}  # name -> [{ts, action, detail}]
         self._max_activity_entries = 20
+        self._workflow_dir = team_dir / "workflow"
+        self._workflow_dir.mkdir(parents=True, exist_ok=True)
         self._load_or_create_config()
 
     def spawn(self, name: str, role: str, prompt: str) -> str:
@@ -671,6 +673,23 @@ class TeammateManager:
             "detail": detail,
         }
         self._log_activity(name, phase, detail)
+
+    def approve_plan(self, name: str) -> None:
+        """Mark a teammate's plan as approved (workflow gate)."""
+        flag = self._workflow_dir / f"{name}_plan_approved"
+        flag.write_text(str(time.time()), encoding="utf-8")
+        self._log_activity(name, "plan_approved")
+
+    def is_plan_approved(self, name: str) -> bool:
+        """Check if a teammate's plan has been approved."""
+        flag = self._workflow_dir / f"{name}_plan_approved"
+        return flag.exists()
+
+    def clear_plan_approval(self, name: str) -> None:
+        """Clear plan approval (e.g., on new task)."""
+        flag = self._workflow_dir / f"{name}_plan_approved"
+        if flag.exists():
+            flag.unlink()
 
     def _log_activity(self, name: str, action: str, detail: str = "") -> None:
         if name not in self._activity_log:

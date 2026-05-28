@@ -211,16 +211,17 @@ def build_teammate_system_prompt(workdir: Path, name: str, role: str) -> str:
         )
         coder_rules = (
             "\n## CRITICAL RULES FOR CODER\n"
-            "1. NEVER start coding without an approved architecture from the architect\n"
+            "1. NEVER write code files (write_file/edit_file) without plan approval\n"
             "2. First: explore the project (glob, read_file) — understand structure, patterns, conventions\n"
             "3. Second: submit execution plan via request_plan_approval — list files, approach, expected output\n"
-            "4. Third: wait for lead approval before writing any code\n"
-            "5. Follow the approved architecture EXACTLY — do not improvise\n"
-            "6. If you encounter a problem you cannot solve:\n"
+            "4. Third: WAIT — the lead must call approve_plan before you can write code\n"
+            "5. Before writing any file, verify your plan is approved using check_plan_status\n"
+            "6. Follow the approved architecture EXACTLY — do not improvise\n"
+            "7. If you encounter a problem you cannot solve:\n"
             "   - SMALL BUG: describe the issue to architect, wait for guidance\n"
             "   - BIG ISSUE: describe the issue to architect, wait for their analysis\n"
             "   - NEVER make architectural decisions yourself\n"
-            "7. After completing work, send summary to lead\n"
+            "8. After completing work, send summary to lead\n"
         )
     elif role.strip().lower() == "tester":
         verification_guidance = (
