@@ -1397,26 +1397,55 @@ class QcodeApp(App):
             return False
 
     def _check_inbox_after_run(self) -> None:
-        """After agent run completes, check inbox and auto-trigger if teammates replied."""
-        if self._has_inbox_messages():
-            chat = self.query_one("#chat-panel", ChatPanel)
-            chat.add_system("[cyan]Team inbox has new messages, processing...[/]")
-            self._run_agent(
-                "Check your inbox for teammate replies and respond to the user.",
-                auto_triggered=True,
-            )
+        """After agent run completes, display teammate replies directly."""
+        self._display_inbox_messages()
 
     def _periodic_inbox_check(self) -> None:
-        """Periodic check: if idle and inbox has messages, auto-trigger."""
+        """Periodic check: display teammate replies directly when user is idle."""
         if self._is_running:
             return
-        if self._has_inbox_messages():
-            chat = self.query_one("#chat-panel", ChatPanel)
-            chat.add_system("[cyan]Teammate reply received, processing...[/]")
-            self._run_agent(
-                "Check your inbox for teammate replies and respond to the user.",
-                auto_triggered=True,
-            )
+        self._display_inbox_messages()
+
+    def _display_inbox_messages(self) -> None:
+        """Read inbox, display messages in chat, and drain to prevent double-display."""
+        team_dir = self.config.workdir / ".team"
+        inbox_path = team_dir / "inbox" / "ld.jsonl"
+        if not inbox_path.exists():
+            return
+        try:
+            if inbox_path.stat().st_size == 0:
+                return
+        except OSError:
+            return
+
+        # Read and drain inbox
+        import json as _json
+        messages = []
+        try:
+            raw = inbox_path.read_text(encoding="utf-8")
+            inbox_path.write_text("", encoding="utf-8")
+            for line in raw.splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        messages.append(_json.loads(line))
+                    except _json.JSONDecodeError:
+                        continue
+        except OSError:
+            return
+
+        if not messages:
+            return
+
+        chat = self.query_one("#chat-panel", ChatPanel)
+        for msg in messages:
+            sender = msg.get("from", "?")
+            content = msg.get("content", "")
+            if isinstance(content, str) and content.strip():
+                display = content[:500]
+                if len(content) > 500:
+                    display += "..."
+                chat.add_system(f"[cyan][{sender}]:[/] {display}")
 
     def _get_tool_status_text(self, tool_name: str, args: str) -> str:
         """Generate human-readable status text for tool calls."""
