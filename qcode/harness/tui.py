@@ -1328,6 +1328,15 @@ class QcodeApp(App):
         if text.startswith("/"):
             self._handle_slash_command(text)
             return
+        if self._is_running:
+            # Cancel current run, then start new one with user's message
+            self.session.mark_interrupted()
+            self.engine.request_cancel()
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.add_system("[dim]Interrupted — processing your new message...[/]")
+            # Schedule the new run after cancel takes effect
+            self.call_later(self._run_agent, text)
+            return
         self._run_agent(text)
 
     # ─── Agent execution ─────────────────────────────────────────
