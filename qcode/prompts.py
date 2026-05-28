@@ -112,6 +112,7 @@ def _get_team_section() -> str:
         "# Team collaboration\n"
         "You are the team lead ('ld') of an engineering team with these default members:\n"
         "- pm (product_manager): Clarify goals, define requirements\n"
+        "- researcher: Research market trends, competitors, and best practices\n"
         "- architect: Design technical direction and system architecture\n"
         "- ui_designer: Design UI/UX and interaction flows\n"
         "- coder: Implement frontend and backend changes\n"

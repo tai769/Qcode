@@ -14,6 +14,11 @@ DEFAULT_TEAM_MEMBERS = [
         "status": "idle",
     },
     {
+        "name": "researcher",
+        "role": "researcher",
+        "status": "idle",
+    },
+    {
         "name": "architect",
         "role": "architect",
         "status": "idle",
@@ -59,6 +64,12 @@ ROLE_GUIDANCE = {
     "product_manager": (
         "Clarify goals, define requirements and acceptance criteria, and keep the work"
         " aligned with product intent."
+    ),
+    "researcher": (
+        "Research market trends, competitor products, and industry best practices. "
+        "Use web search to gather information about how similar products work, "
+        "what features they offer, and what users expect. "
+        "Provide data-driven insights to help product decisions."
     ),
     "architect": (
         "Design technical direction, system boundaries, interfaces, and refactor plans"
