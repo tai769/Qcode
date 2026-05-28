@@ -160,20 +160,46 @@ class AgentEngine:
                 },
             )
 
-            accumulator = ResponseAccumulator()
-            self.streaming_tool_executor.begin_turn(session)
-            tools = self.tool_registry.definitions()
-            try:
-                for event in self.provider.stream_chat_completion(
-                    session.messages,
-                    tools,
-                ):
-                    self._handle_response_event(session, event)
-                    self.streaming_tool_executor.observe_event(event)
-                    accumulator.consume(event)
-            except Exception:
-                self.streaming_tool_executor.discard(wait_running=True)
-                raise
+            # Retry logic for transient network errors
+            max_retries = 3
+            last_error = None
+            for retry_attempt in range(max_retries):
+                accumulator = ResponseAccumulator()
+                self.streaming_tool_executor.begin_turn(session)
+                tools = self.tool_registry.definitions()
+                try:
+                    for event in self.provider.stream_chat_completion(
+                        session.messages,
+                        tools,
+                    ):
+                        self._handle_response_event(session, event)
+                        self.streaming_tool_executor.observe_event(event)
+                        accumulator.consume(event)
+                    last_error = None
+                    break  # Success
+                except Exception as exc:
+                    self.streaming_tool_executor.discard(wait_running=True)
+                    error_msg = str(exc).lower()
+                    # Only retry on transient network errors
+                    is_transient = any(keyword in error_msg for keyword in (
+                        "prematurely", "remoteend", "connection",
+                        "reset", "broken pipe", "eof",
+                    ))
+                    if is_transient and retry_attempt < max_retries - 1:
+                        import time
+                        wait = (retry_attempt + 1) * 2
+                        self._emit_event(
+                            "model.retry",
+                            {
+                                "session_id": session.session_id,
+                                "attempt": retry_attempt + 1,
+                                "error": str(exc)[:100],
+                                "wait_seconds": wait,
+                            },
+                        )
+                        time.sleep(wait)
+                        continue
+                    raise
 
             result = accumulator.to_chat_result()
             if result.response_id:
