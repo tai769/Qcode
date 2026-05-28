@@ -64,22 +64,21 @@ def _get_using_tools_section() -> str:
         "that require shell execution.\n"
         "You can call multiple tools in a single response. "
         "If tools have no dependencies, call them in parallel.\n\n"
-        "## Todo tool usage\n"
-        "Use todo to track multi-step tasks. The parameter must be 'items' (array), NOT 'todos' (string).\n\n"
-        "Correct format:\n"
+        "## CRITICAL: Todo tool usage\n"
+        "Use todo to track multi-step tasks.\n\n"
+        "**CORRECT format (MUST use 'items' array):**\n"
         "```json\n"
-        "{\n"
-        '  "items": [\n'
-        '    {"id": "1", "text": "Task description", "status": "pending"},\n'
-        '    {"id": "2", "text": "Another task", "status": "in_progress"}\n'
-        "  ]\n"
-        "}\n"
+        '{"items": [{"id": "1", "text": "Task description", "status": "pending"}]}\n'
         "```\n\n"
-        "WRONG (will cause error):\n"
+        "**WRONG format (will cause error):**\n"
         "```json\n"
-        '{"todos": "[{...}]"}  // Wrong! todos is not a parameter\n'
+        '{"todos": "[{...}]"}  // WRONG! todos is not a parameter\n'
+        '{"items": "some text"}  // WRONG! items must be array\n'
         "```\n\n"
-        "Status options: pending, in_progress, completed"
+        "**Status options:** pending, in_progress, completed\n\n"
+        "## Team workflow\n"
+        "After spawn_teammate, always check read_inbox() for replies.\n"
+        "Teammates reply via send_message, which writes to your inbox."
     )
 
 
