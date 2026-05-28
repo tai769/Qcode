@@ -300,7 +300,7 @@ class TeammateManager:
         thread.start()
 
     def _teammate_loop(self, name: str) -> None:
-        session = ConversationSession()
+        session = self.load_checkpoint(name) or ConversationSession()
         idle_mode = "autonomous"
         consecutive_failures = 0
         max_consecutive_failures = 3
@@ -438,6 +438,7 @@ class TeammateManager:
             else:
                 consecutive_failures = 0
                 self._update_heartbeat(name, "completed")
+                self.save_checkpoint(name, session)
 
             member = self.get_member(name)
             if member is None or member["status"] == "shutdown":
@@ -690,6 +691,32 @@ class TeammateManager:
         flag = self._workflow_dir / f"{name}_plan_approved"
         if flag.exists():
             flag.unlink()
+
+    def save_checkpoint(self, name: str, session) -> None:
+        """Save session checkpoint after successful run."""
+        checkpoint_dir = self.dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        path = checkpoint_dir / f"{name}.jsonl"
+        try:
+            session.save(checkpoint_dir)
+            # Rename to teammate-specific name
+            latest = sorted(checkpoint_dir.glob("*.jsonl"), reverse=True)
+            if latest and latest[0].name != f"{name}.jsonl":
+                latest[0].rename(path)
+        except Exception:
+            pass
+
+    def load_checkpoint(self, name: str):
+        """Load last checkpoint for a teammate, or return None."""
+        checkpoint_dir = self.dir / "checkpoints"
+        path = checkpoint_dir / f"{name}.jsonl"
+        if not path.exists():
+            return None
+        try:
+            from qcode.runtime.session import ConversationSession
+            return ConversationSession.load(path)
+        except Exception:
+            return None
 
     def _log_activity(self, name: str, action: str, detail: str = "") -> None:
         if name not in self._activity_log:
