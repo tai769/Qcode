@@ -452,6 +452,10 @@ class TeammateManager:
                 consecutive_failures = 0
                 self._update_heartbeat(name, "completed")
                 self.save_checkpoint(name, session)
+                # Log file changes from this run
+                changes = self._extract_file_changes(session)
+                if changes:
+                    self._log_activity(name, "files_changed", f"{len(changes)} files: {', '.join(changes[-3:])}")
 
             member = self.get_member(name)
             if member is None or member["status"] == "shutdown":
@@ -730,6 +734,26 @@ class TeammateManager:
             return ConversationSession.load(path)
         except Exception:
             return None
+
+    def _extract_file_changes(self, session) -> list[str]:
+        """Extract file paths changed by write_file/edit_file from session messages."""
+        changes = []
+        for msg in session.messages:
+            if msg.get("role") != "assistant":
+                continue
+            tool_calls = msg.get("tool_calls", [])
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                fn_name = fn.get("name", "")
+                if fn_name in ("write_file", "edit_file"):
+                    try:
+                        args = json.loads(fn.get("arguments", "{}"))
+                        path = args.get("path", "")
+                        if path:
+                            changes.append(path)
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+        return changes
 
     def _log_activity(self, name: str, action: str, detail: str = "") -> None:
         if name not in self._activity_log:

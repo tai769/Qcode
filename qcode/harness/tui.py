@@ -645,11 +645,12 @@ class TeamPanel(Static):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._members: List[Dict[str, str]] = []
+        self._team_dir: Optional[Path] = None
 
     def render(self) -> str:
         if not self._members:
             return "[dim]  No teammates[/]\n[dim]  Use /team to setup[/]"
-        lines = ["[bold]  Team[/]", "─" * 25]
+        lines = ["[bold]  Team[/]", "─" * 30]
         for m in self._members:
             name = m.get("name", "?")
             role = m.get("role", "?")
@@ -662,11 +663,22 @@ class TeamPanel(Static):
                 icon = "[dim]◌[/]"
             else:
                 icon = "[red]×[/]"
-            lines.append(f" {icon} {name} [dim]{role}[/]")
+            # Show plan approval and pending messages
+            extras = []
+            if self._team_dir:
+                plan_flag = self._team_dir / "workflow" / f"{name}_plan_approved"
+                if plan_flag.exists():
+                    extras.append("[green]plan✓[/]")
+                inbox_path = self._team_dir / "inbox" / f"{name}.jsonl"
+                if inbox_path.exists() and inbox_path.stat().st_size > 0:
+                    extras.append("[yellow]msg![/]")
+            extra_str = f" {' '.join(extras)}" if extras else ""
+            lines.append(f" {icon} {name} [dim]{role}[/]{extra_str}")
         return "\n".join(lines)
 
-    def update_members(self, members: List[Dict[str, str]]) -> None:
+    def update_members(self, members: List[Dict[str, str]], team_dir: Optional[Path] = None) -> None:
         self._members = members
+        self._team_dir = team_dir
         self.refresh()
 
 
@@ -1328,6 +1340,10 @@ class QcodeApp(App):
         if text.startswith("/"):
             self._handle_slash_command(text)
             return
+        # Handle @mention: @teammate_name message
+        if text.startswith("@"):
+            self._handle_mention(text)
+            return
         if self._is_running:
             # Cancel current run, then start new one with user's message
             self.session.mark_interrupted()
@@ -1340,6 +1356,52 @@ class QcodeApp(App):
         self._run_agent(text)
 
     # ─── Agent execution ─────────────────────────────────────────
+
+    def _handle_mention(self, text: str) -> None:
+        """Handle @teammate_name message — send directly to teammate inbox."""
+        import re
+        match = re.match(r"@(\w+)\s+(.*)", text, re.DOTALL)
+        if not match:
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.add_system("[dim]Usage: @teammate_name message[/]")
+            return
+
+        teammate_name = match.group(1)
+        message = match.group(2).strip()
+        if not message:
+            return
+
+        # Verify teammate exists
+        team_dir = self.config.workdir / ".team"
+        config_path = team_dir / "config.json"
+        known_names = []
+        if config_path.exists():
+            data = json.loads(config_path.read_text())
+            known_names = [m.get("name", "") for m in data.get("members", [])]
+
+        if teammate_name not in known_names:
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.add_system(f"[red]Unknown teammate '{teammate_name}'. Known: {', '.join(known_names)}[/]")
+            return
+
+        # Send message to teammate's inbox
+        import time
+        inbox_path = team_dir / "inbox" / f"{teammate_name}.jsonl"
+        inbox_path.parent.mkdir(parents=True, exist_ok=True)
+        msg = {
+            "type": "message",
+            "from": "user",
+            "to": teammate_name,
+            "content": message,
+            "timestamp": time.time(),
+        }
+        with inbox_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+
+        # Display in chat
+        chat = self.query_one("#chat-panel", ChatPanel)
+        chat.add_user_message(f"@{teammate_name} {message}")
+        chat.add_system(f"[dim]Message sent to {teammate_name}[/]")
 
     @work(exclusive=True)
     async def _run_agent(self, user_text: str, *, auto_triggered: bool = False) -> None:
@@ -2126,14 +2188,10 @@ class QcodeApp(App):
             data = json.loads(config_path.read_text())
             members = data.get("members", [])
         else:
-            # Use default team members
             from qcode.team_defaults import DEFAULT_TEAM_MEMBERS
             members = DEFAULT_TEAM_MEMBERS.copy()
 
-        # Don't override status - use config.json status directly
-        # The status is managed by TeammateManager (idle/working/shutdown)
-
-        panel.update_members(members)
+        panel.update_members(members, team_dir=team_dir)
 
     # ─── Permission ──────────────────────────────────────────────
 
